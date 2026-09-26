@@ -70,6 +70,20 @@ def write_cache(key, result):
     temp.replace(path)
 
 
+def decoded_enough(decoded, frame_count, fps):
+    """Whether decoding reached the end of the video.
+
+    Containers report an *estimated* frame count for variable-frame-rate video
+    (e.g. clips recorded from live view), so allow a shortfall of up to one
+    second or 10% of the frames, but never more than half the video. A
+    truncated, half-written file still fails.
+    """
+    if frame_count <= 0:
+        return True
+    allowance = min(max(2, int(fps), int(frame_count * 0.1)), frame_count // 2)
+    return decoded >= frame_count - allowance
+
+
 def iou(a, b):
     width = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     height = max(0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -324,7 +338,7 @@ class Engine:
         check_cancel(cancel)
         if not frames:
             raise ValueError("No video frames could be decoded.")
-        if frame_count > 0 and index < frame_count - max(2, int(fps * 0.1)):
+        if not decoded_enough(index, frame_count, fps):
             raise ValueError(f"The decoder stopped at frame {index} of {frame_count}. The video may be incomplete.")
         if cache_key(video, model_dir, labels) != key:
             raise ValueError("The video or model changed during analysis. Retry once the file is complete.")

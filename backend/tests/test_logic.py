@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kiwibit_hub.engine import animals_at, cache_key, read_labels
+from kiwibit_hub.engine import animals_at, cache_key, decoded_enough, read_labels
 
 
 class PlayerLogicTests(unittest.TestCase):
@@ -34,6 +34,19 @@ class PlayerLogicTests(unittest.TestCase):
             path.write_text("bird\n")
             with self.assertRaises(ValueError):
                 read_labels(path)
+
+
+class CompletenessTests(unittest.TestCase):
+    def test_estimated_frame_counts_do_not_fail_complete_videos(self):
+        # A 4.3 s live clip at ~14 fps: container estimate 60, decoded 55.
+        self.assertTrue(decoded_enough(55, 60, 13.9))
+        self.assertTrue(decoded_enough(296, 296, 12.75))
+        self.assertTrue(decoded_enough(10, 0, 30), 'unknown frame count')
+
+    def test_truncated_videos_still_fail(self):
+        self.assertFalse(decoded_enough(150, 300, 12.75), 'half a recording')
+        self.assertFalse(decoded_enough(250, 300, 12.75), 'several seconds missing')
+        self.assertFalse(decoded_enough(0, 20, 30))
 
 
 if __name__ == "__main__":
