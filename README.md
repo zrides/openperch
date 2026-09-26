@@ -29,6 +29,9 @@ This is an unofficial client built from a reverse-engineered API.
 - **Check the AI**: an answer key of about 150 moments you identify by eye (the
   AI's guess stays hidden), and a score comparing the AI with your answers after
   every change. The answers only measure the AI; they are never used to train it.
+  A field guide (key G) shows reference photos from Wikipedia, including females
+  and young birds where the article has them, next to the moments you have
+  already identified; the browser loads these photos from Wikipedia.
 
 ## Run with Docker
 

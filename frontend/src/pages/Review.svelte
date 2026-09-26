@@ -1,5 +1,7 @@
 <script lang="ts">
+  import FieldGuide from '../lib/FieldGuide.svelte';
   import Icon from '../lib/Icon.svelte';
+  import { fieldGuide } from '../lib/fieldGuide';
   import { api, ApiError, type ReviewItem, type ReviewScore, type SpeciesSummary, type Verdict } from '../lib/api';
   import { clock, dateTime } from '../lib/format';
 
@@ -26,10 +28,31 @@
   let score = $state<ReviewScore | null>(null);
   let scoreError = $state('');
   let picture: HTMLElement | undefined = $state();
+  let guideOpen = $state(false);
+  // Field-guide photo per quick species, once loaded; '' when Wikipedia has none.
+  let thumbs: Record<string, string> = $state({});
 
   const item = $derived(items[index] ?? null);
   const answered = $derived(items.filter((i) => i.verdict !== null).length);
   const allDone = $derived(items.length > 0 && answered === items.length);
+  // Moments you already identified, by species: your own camera's examples for the field guide.
+  const examples = $derived.by(() => {
+    const bySpecies: Record<string, string[]> = {};
+    for (const row of items) {
+      if (row.verdict === 'species' && row.answer && row.id !== item?.id) (bySpecies[row.answer] ??= []).push(row.id);
+    }
+    return bySpecies;
+  });
+
+  const requested = new Set<string>();
+  $effect(() => {
+    for (const name of quick) {
+      if (requested.has(name)) continue;
+      requested.add(name);
+      fieldGuide(name).then((entry) => { thumbs[name] = entry?.photos[0]?.src ?? ''; });
+    }
+  });
+
   const matches = $derived(search.trim().length >= 2
     ? labels.filter((label) => label.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 6)
     : []);
@@ -145,7 +168,10 @@
       return;
     }
     const special = SPECIAL.find((s) => s.key === event.key.toUpperCase());
-    if (special) {
+    if (event.key.toUpperCase() === 'G') {
+      event.preventDefault();
+      guideOpen = true;
+    } else if (special) {
       event.preventDefault();
       save(special.verdict);
     } else if (event.key === 'ArrowLeft') {
@@ -252,7 +278,12 @@
       </figure>
 
       <section class="card choices" aria-labelledby="question">
-        <p id="question" class="eyebrow">What is in the box?</p>
+        <div class="question">
+          <p id="question" class="eyebrow">What is in the box?</p>
+          <button type="button" class="btn guide-button" onclick={() => { guideOpen = true; }}>
+            <Icon name="bird" size={18} />Field guide<span class="key mono" aria-hidden="true">G</span>
+          </button>
+        </div>
         {#if item.verdict}
           <p class="current">Your answer: <strong>{answerText(item)}</strong>
             <button type="button" class="link" disabled={saving} onclick={() => save(null)}>Clear</button></p>
@@ -262,7 +293,9 @@
             <button type="button" class="choice" disabled={saving}
                     aria-pressed={item.verdict === 'species' && item.answer === species}
                     onclick={() => save('species', species)}>
-              <span class="key mono" aria-hidden="true">{i + 1}</span>{species}
+              <span class="key mono" aria-hidden="true">{i + 1}</span>
+              {#if thumbs[species]}<img class="thumb" src={thumbs[species]} alt="" loading="lazy">{:else}<span class="thumb"></span>{/if}
+              <span class="name">{species}</span>
             </button>
           {/each}
         </div>
@@ -292,7 +325,7 @@
           <button type="button" class="btn" onclick={() => go(-1)}><Icon name="back" size={18} />Previous</button>
           <button type="button" class="btn" onclick={() => go(1)}>Skip<Icon name="forward" size={18} /></button>
         </div>
-        <p class="muted small hint">Keys: 1–{quick.length} pick a species · N, M, U the answers above · ← → move.</p>
+        <p class="muted small hint">Keys: 1–{quick.length} pick a species · N, M, U the answers above · G field guide · ← → move.</p>
       </section>
     </div>
   {:else if tab === 'score'}
@@ -380,6 +413,11 @@
   {/if}
 </div>
 
+{#if guideOpen && item}
+  <FieldGuide species={quick} {examples} picture="/api/review/{item.id}/image" box={boxStyle(item)}
+              onpick={(name) => { guideOpen = false; save('species', name); }} onclose={() => { guideOpen = false; }} />
+{/if}
+
 <style>
   .page { padding: 28px 36px; display: flex; flex-direction: column; gap: 18px; max-width: 1180px; }
   .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -425,6 +463,10 @@
   .choice:hover:not(:disabled) { background: #F7F4EC; }
   .choice[aria-pressed='true'], .special .btn[aria-pressed='true'] { border-color: var(--spruce); background: var(--spruce-soft); }
   .choice:disabled { cursor: progress; }
+  .thumb { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--segment); }
+  .name { min-width: 0; }
+  .question { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .guide-button { min-height: 38px; padding: 0 12px; font-size: 14px; }
   .key {
     display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
     border-radius: 6px; background: var(--segment); color: var(--muted); font-size: 12px; font-weight: 600;
