@@ -6,7 +6,7 @@ services:
     image: kiwibit-hub:dev
     ports:
       # Localhost only by default. Set KIWIBIT_HUB_BIND=0.0.0.0 in .env to reach it from your phone.
-      - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_HUB_PORT:-8000}:8000"
+      - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_HUB_PORT:-8765}:8000"
     environment:
       KIWIBIT_HUB_USER: ${KIWIBIT_HUB_USER:-kiwibit}
       KIWIBIT_HUB_PASSWORD: ${KIWIBIT_HUB_PASSWORD:?Set KIWIBIT_HUB_PASSWORD in .env}

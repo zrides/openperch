@@ -22,7 +22,7 @@ Copy-Item .env.example .env   # then set KIWIBIT_HUB_PASSWORD
 docker compose up -d --build
 ```
 
-Open <http://127.0.0.1:8000/docs> for the interactive API and sign in with the
+Open <http://127.0.0.1:8765/docs> for the interactive API and sign in with the
 `.env` credentials. To reach it from a phone, set `KIWIBIT_HUB_BIND=0.0.0.0`
 (use a VPN such as Tailscale rather than exposing it to the internet).
 
