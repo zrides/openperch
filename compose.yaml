@@ -1,0 +1,24 @@
+name: kiwibit-hub
+
+services:
+  hub:
+    build: ./backend
+    image: kiwibit-hub:dev
+    ports:
+      # Localhost only by default. Set KIWIBIT_HUB_BIND=0.0.0.0 in .env to reach it from your phone.
+      - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_HUB_PORT:-8000}:8000"
+    environment:
+      KIWIBIT_HUB_USER: ${KIWIBIT_HUB_USER:-kiwibit}
+      KIWIBIT_HUB_PASSWORD: ${KIWIBIT_HUB_PASSWORD:?Set KIWIBIT_HUB_PASSWORD in .env}
+    volumes:
+      - ${KIWIBIT_DATA_DIR:-./data}:/data
+      - ${KIWIBIT_BIOCLIP_DIR:-../bioclip-2.5-vith14}:/models/bioclip:ro
+    secrets:
+      - kiwibit_account
+    gpus: all
+    restart: unless-stopped
+
+secrets:
+  # The Kiwibit account token. Mounted read-only; never copied into the image or data.
+  kiwibit_account:
+    file: ${KIWIBIT_ACCOUNT_CONFIG:-../kiwibit-analysis/kiwibit-viewer/config.json}

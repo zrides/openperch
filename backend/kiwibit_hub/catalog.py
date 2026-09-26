@@ -48,7 +48,7 @@ def encode_photo(crop, box, target, cancel):
 
 
 class Catalog:
-    def __init__(self, root=None, media_root=None, check_same_thread=True):
+    def __init__(self, root=None, media_root=None, check_same_thread=True, migrate=True):
         self.root = Path(root) if root is not None else LIBRARY
         # Videos under media_root are stored relative to it, so one library works
         # both natively and inside a container that mounts the data elsewhere.
@@ -56,6 +56,10 @@ class Catalog:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.root / "library.sqlite3", timeout=30, check_same_thread=check_same_thread)
         self.db.row_factory = sqlite3.Row
+        if migrate:
+            self._migrate()
+
+    def _migrate(self):
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(videos)')}
         if columns and 'gallery_version' not in columns:
             backup_path = self.root / 'library-before-smart-v1.sqlite3'
@@ -74,6 +78,7 @@ class Catalog:
                 track INTEGER NOT NULL, similarity REAL NOT NULL, path TEXT NOT NULL,
                 FOREIGN KEY(video_id) REFERENCES videos(id));
             CREATE INDEX IF NOT EXISTS photos_species ON photos(species);
+            CREATE INDEX IF NOT EXISTS photos_video ON photos(video_id);
             CREATE TABLE IF NOT EXISTS sightings (
                 id TEXT PRIMARY KEY, video_id TEXT NOT NULL, source_signature TEXT NOT NULL,
                 track INTEGER NOT NULL, start_ms REAL NOT NULL, end_ms REAL NOT NULL,

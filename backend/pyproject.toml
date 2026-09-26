@@ -1,0 +1,31 @@
+[project]
+name = "kiwibit-hub"
+version = "0.1.0"
+description = "Self-hosted Kiwibit camera hub: cloud recordings, bird identification, library."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "opencv-python-headless>=4.10,<5",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+# Install torch/torchvision from https://download.pytorch.org/whl/cu128 first (see Dockerfile).
+ml = [
+    "open_clip_torch==3.3.0",
+    "ultralytics==8.4.160",
+    "openai-clip==1.0.1",
+    "safetensors==0.8.0",
+]
+dev = ["httpx2"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kiwibit_hub*"]
+
+[tool.setuptools.package-data]
+kiwibit_hub = ["*.txt"]

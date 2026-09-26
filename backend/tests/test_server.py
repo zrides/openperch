@@ -1,0 +1,156 @@
+import base64
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+import cv2
+import numpy as np
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from kiwibit_hub.catalog import Catalog
+from kiwibit_hub.jobs import JobRunner
+from kiwibit_hub.server import Credentials, create_app
+
+
+def basic(user, password):
+    return {'Authorization': 'Basic ' + base64.b64encode(f'{user}:{password}'.encode()).decode()}
+
+
+AUTH = basic('kiwibit', 'correct horse')
+
+
+class ServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.library = self.root / 'library'
+        downloads = self.root / 'downloads'
+        downloads.mkdir()
+        self.video = downloads / 'bird.avi'
+        writer = cv2.VideoWriter(str(self.video), cv2.VideoWriter_fourcc(*'MJPG'), 10, (64, 48))
+        for _ in range(21):
+            writer.write(np.full((48, 64, 3), 120, dtype=np.uint8))
+        writer.release()
+        db = Catalog(self.library, self.root)
+        self.identity = db.ingest(self.video)
+        animal = {'id': 1, 'category': 'bird', 'box': [.1, .1, .9, .9], 'detection': .9,
+                  'ranked': [{'label': 'Northern cardinal', 'similarity': .4, 'score': .9},
+                             {'label': 'Blue jay', 'similarity': .2, 'score': .1}]}
+        self.result = {'complete': True, 'fps': 10, 'frames': [{'ms': n*100, 'animals': [dict(animal)]} for n in range(21)]}
+        db.close()
+        self.runner = JobRunner(self.library, downloads, self.root)
+        app = create_app(self.runner, Credentials('kiwibit', 'correct horse'), self.library, self.root, diagnostics=False)
+        self.client = TestClient(app, headers=AUTH)
+        self.client.__enter__()
+
+    def tearDown(self):
+        self.client.__exit__(None, None, None)
+        self.temp.cleanup()
+
+    def process(self):
+        db = Catalog(self.library, self.root)
+        db.save_analysis(self.identity, self.result, threading.Event())
+        db.close()
+
+    def test_everything_but_health_requires_credentials(self):
+        anonymous = TestClient(self.client.app)
+        self.assertEqual(anonymous.get('/api/health').status_code, 200)
+        for path in ('/api/recordings', '/api/status', '/docs', '/openapi.json'):
+            response = anonymous.get(path)
+            self.assertEqual(response.status_code, 401, path)
+            self.assertIn('Basic', response.headers['www-authenticate'])
+        self.assertEqual(anonymous.get('/api/recordings', headers=basic('kiwibit', 'wrong')).status_code, 401)
+        self.assertEqual(anonymous.get('/api/recordings', headers={'Authorization': 'Basic !!!'}).status_code, 401)
+        with self.assertRaises(WebSocketDisconnect):
+            with anonymous.websocket_connect('/api/events') as socket:
+                socket.receive_json()
+
+    def test_server_refuses_to_start_without_a_password(self):
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'KIWIBIT_HUB_PASSWORD': ''}, clear=False):
+            os.environ.pop('KIWIBIT_HUB_ALLOW_NO_AUTH', None)
+            with self.assertRaisesRegex(RuntimeError, 'KIWIBIT_HUB_PASSWORD'):
+                Credentials.from_env()
+
+    def test_recordings_and_video_range_requests(self):
+        recordings = self.client.get('/api/recordings').json()
+        self.assertEqual([(r['id'], r['name'], r['status']) for r in recordings], [(self.identity, 'bird.avi', 'pending')])
+        self.assertEqual(self.client.get('/api/recordings', params={'q': 'nothing'}).json(), [])
+        full = self.client.get(f'/api/recordings/{self.identity}/video')
+        self.assertEqual(full.content, self.video.read_bytes())
+        # Browsers seek with Range requests.
+        part = self.client.get(f'/api/recordings/{self.identity}/video', headers={'Range': 'bytes=0-9'})
+        self.assertEqual(part.status_code, 206)
+        self.assertEqual(part.content, self.video.read_bytes()[:10])
+        self.assertEqual(self.client.get('/api/recordings/unknown/video').status_code, 404)
+
+    def test_analysis_species_photos_and_corrections(self):
+        self.assertEqual(self.client.get(f'/api/recordings/{self.identity}/analysis').status_code, 404)
+        self.process()
+        analysis = self.client.get(f'/api/recordings/{self.identity}/analysis').json()
+        self.assertEqual(len(analysis['frames']), 21)
+        self.assertIn('sighting_id', analysis['frames'][0]['animals'][0])
+        species = self.client.get('/api/species').json()
+        self.assertEqual(len(species), 1)
+        name = species[0]['species']
+        photos = self.client.get(f'/api/species/{name}/photos', params={'include_duplicates': True}).json()
+        self.assertEqual(len(photos), 3)
+        image = self.client.get(f"/api/photos/{photos[0]['path']}")
+        self.assertEqual(image.headers['content-type'], 'image/jpeg')
+        self.assertTrue(image.content.startswith(b'\xff\xd8'))
+
+        sighting = photos[0]['sighting_id']
+        response = self.client.post(f'/api/sightings/{sighting}/correction', json={'label': 'Purple finch'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([s['species'] for s in self.client.get('/api/species').json()], ['Purple finch'])
+        overlay = self.client.get(f'/api/recordings/{self.identity}/analysis').json()['frames'][0]['animals'][0]
+        self.assertEqual(overlay['display_label'], 'Purple finch')
+        self.client.post(f'/api/sightings/{sighting}/correction', json={'label': None})
+        self.assertEqual([s['species'] for s in self.client.get('/api/species').json()], [name])
+        self.assertEqual(self.client.post('/api/sightings/missing/correction', json={'label': 'X'}).status_code, 409)
+        self.assertEqual(self.client.post(f'/api/sightings/{sighting}/correction', json={'label': ''}).status_code, 409)
+
+    def test_photo_endpoint_only_serves_gallery_jpegs(self):
+        self.process()
+        for path in ('library.sqlite3', '../downloads/bird.avi', 'results/../library.sqlite3',
+                     '..%2F..%2Fsecret.jpg', 'results/nope.jpg'):
+            self.assertEqual(self.client.get(f'/api/photos/{path}').status_code, 404, path)
+
+    def test_jobs_validation_start_and_events(self):
+        self.assertEqual(self.client.post('/api/jobs', json={'action': 'import', 'ids': ['C:/Windows']}).status_code, 422)
+        self.assertEqual(self.client.post('/api/jobs', json={'action': 'reanalyze'}).status_code, 422)
+        with self.client.websocket_connect('/api/events') as socket:
+            self.assertEqual(socket.receive_json(), {'kind': 'state', **self.runner.state})
+            self.assertEqual(self.client.post('/api/jobs', json={'action': 'scan'}).status_code, 202)
+            kinds = []
+            while True:
+                event = socket.receive_json()
+                kinds.append(event['kind'])
+                if event['kind'] == 'state' and not event['running']:
+                    break
+            self.assertEqual(kinds[0], 'state')
+            self.assertIn('message', kinds)
+        self.assertFalse(self.client.get('/api/jobs').json()['running'])
+
+    def test_processing_settings(self):
+        self.assertEqual(self.client.put('/api/settings/processing',
+                                         json={'detector_batch': 8, 'classifier_batch': 16}).status_code, 200)
+        settings = self.client.get('/api/settings/processing').json()
+        self.assertEqual((settings['detector_batch'], settings['classifier_batch']), (8, 16))
+        self.assertEqual(self.client.put('/api/settings/processing',
+                                         json={'detector_batch': 5, 'classifier_batch': 16}).status_code, 422)
+
+    def test_status_summary(self):
+        self.process()
+        status = self.client.get('/api/status').json()
+        self.assertEqual(status['recordings'], 1)
+        self.assertEqual(status['by_status'], {'ready': 1})
+        self.assertEqual(status['photos'], 3)
+        self.assertFalse(status['job']['running'])
+
+
+if __name__ == '__main__':
+    unittest.main()
