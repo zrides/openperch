@@ -7,8 +7,9 @@
   import Birds from './pages/Birds.svelte';
   import Home from './pages/Home.svelte';
   import Camera from './pages/Camera.svelte';
+  import Review from './pages/Review.svelte';
 
-  const ROUTES = ['home', 'live', 'recordings', 'birds', 'camera'];
+  const ROUTES = ['home', 'live', 'recordings', 'birds', 'camera', 'review'];
 
   // #/<page>[/<id>][?t=<ms>]
   function parse() {
@@ -50,6 +51,8 @@
       <Birds species={current.id} />
     {:else if route === 'camera'}
       <Camera />
+    {:else if route === 'review'}
+      <Review />
     {/if}
   </main>
 </div>

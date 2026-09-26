@@ -11,6 +11,7 @@
     { route: 'recordings', label: 'Recordings', short: 'Clips', icon: 'recordings' },
     { route: 'birds', label: 'Birds', short: 'Birds', icon: 'bird' },
     { route: 'camera', label: 'Camera', short: 'Camera', icon: 'camera' },
+    { route: 'review', label: 'Check the AI', short: 'Check', icon: 'review' },
   ];
 
   const percent = $derived(hub.job.total > 0 ? Math.round((hub.job.value / hub.job.total) * 100) : null);
@@ -95,7 +96,7 @@
   @media (max-width: 860px) {
     .sidebar { display: none; }
     .tabs {
-      display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; inset: auto 0 0 0; z-index: 10;
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); position: fixed; inset: auto 0 0 0; z-index: 10;
       padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line);
     }
     .tabs a {

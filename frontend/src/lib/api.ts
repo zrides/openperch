@@ -165,6 +165,43 @@ export function photoSighting(photo: Photo): Sighting | null {
   };
 }
 
+/** What a moment in the answer key really shows. */
+export type Verdict = 'species' | 'not_bird' | 'several' | 'unsure';
+
+/** A moment to identify by eye. It carries no AI guess, so nothing sways the answer. */
+export interface ReviewItem {
+  id: string;
+  video_id: string;
+  name: string;
+  recorded_at: string | null;
+  ms: number;
+  /** The animal's box and the pictured square, both as [x1, y1, x2, y2] fractions of the frame. */
+  box: [number, number, number, number];
+  view: [number, number, number, number];
+  verdict: Verdict | null;
+  answer: string | null;
+  answered: string | null;
+}
+
+export interface ReviewGrades {
+  graded: number;
+  correct: number;
+  uncertain: number;
+  wrong: number;
+  missed: number;
+}
+
+export interface ReviewScore {
+  total: number;
+  answered: number;
+  /** "Can't tell" and "More than one animal" answers, which grade nothing. */
+  excluded: number;
+  birds: ReviewGrades & { guessed: number; guess_correct: number };
+  not_birds: { graded: number; left_out: number; shown_as_bird: number };
+  species: (ReviewGrades & { species: string })[];
+  confusions: { answer: string; guess: string; count: number }[];
+}
+
 export interface Session {
   authenticated: boolean;
   user: string | null;

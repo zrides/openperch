@@ -88,6 +88,12 @@ class Catalog:
             CREATE TABLE IF NOT EXISTS corrections (
                 sighting_id TEXT PRIMARY KEY, label TEXT NOT NULL,
                 updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            -- Moments identified by eye to measure the AI (see review.py). Keyed by frame
+            -- and box, not sighting, so answers survive re-tracking and re-analysis.
+            CREATE TABLE IF NOT EXISTS answer_key (
+                id TEXT PRIMARY KEY, position INTEGER NOT NULL, video_id TEXT NOT NULL,
+                frame INTEGER NOT NULL, ms REAL NOT NULL, box TEXT NOT NULL, view TEXT NOT NULL,
+                stratum TEXT NOT NULL, verdict TEXT, answer TEXT, answered TEXT);
         """)
         with self.db:
             if 'gallery_version' not in {r[1] for r in self.db.execute('PRAGMA table_info(videos)')}:

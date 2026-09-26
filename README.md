@@ -26,6 +26,9 @@ This is an unofficial client built from a reverse-engineered API.
   need review, and corrections.
 - **Camera**: the camera's status and its current settings (read-only for now,
   see below), automatic fetching, GPU batch sizes, sign-out.
+- **Check the AI**: an answer key of about 150 moments you identify by eye (the
+  AI's guess stays hidden), and a score comparing the AI with your answers after
+  every change. The answers only measure the AI; they are never used to train it.
 
 ## Run with Docker
 
@@ -116,6 +119,10 @@ the Kiwibit app.
 | `GET /api/photos/{path}` | A photo; `?size=thumb` for a cached 360 px thumbnail |
 | `POST /api/sightings/{id}/correction` | `{"label": "..."}` to correct, `null` to restore AI |
 | `GET /api/labels` | Candidate species names |
+| `GET /api/review`, `POST /api/review` | The answer key's moments; pick them (once) |
+| `PUT /api/review/{id}` | `{"verdict": "species" \| "not_bird" \| "several" \| "unsure", "species": "..."}`; `null` verdict clears |
+| `GET /api/review/{id}/image` | The moment's picture, cut from the original frame |
+| `GET /api/review/score` | How the AI's current results compare with your answers |
 | `POST /api/jobs` | `{"action": "scan" \| "process" \| "selected" \| "reanalyze" \| "fetch" \| "verify" \| "upgrade", "ids": [...]}` |
 | `POST /api/jobs/cancel` | Stop after the current operation |
 | `WS /api/events` | Job state, messages, progress, library changes and live status |

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config
+from . import config, review
 from .auth import SESSION_COOKIE, SESSION_SECONDS, Credentials, LoginLimiter
 from .camera import CameraService
 from .catalog import Catalog
@@ -70,6 +70,12 @@ class JobRequest(BaseModel):
 class CorrectionRequest(BaseModel):
     # null restores the AI identification.
     label: str | None
+
+
+class ReviewAnswer(BaseModel):
+    # species, not_bird, several or unsure; null clears the answer.
+    verdict: str | None
+    species: str | None = None
 
 
 class LiveStart(BaseModel):
@@ -365,6 +371,43 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     @app.get('/api/corrections/unmatched')
     def unmatched(db: Catalog = Depends(catalog)):
         return [dict(row) for row in db.unmatched_corrections()]
+
+    @app.get('/api/review')
+    def review_items(db: Catalog = Depends(catalog)):
+        return [{**item, 'recorded_at': recorded_at(item['name'])} for item in review.items(db)]
+
+    @app.post('/api/review', status_code=201)
+    def review_build(db: Catalog = Depends(catalog)):
+        try:
+            review.build(db)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return review_items(db)
+
+    @app.get('/api/review/score')
+    def review_score(db: Catalog = Depends(catalog)):
+        return review.score(db)
+
+    @app.put('/api/review/{item_id}')
+    def review_answer(item_id: str, body: ReviewAnswer, db: Catalog = Depends(catalog)):
+        try:
+            review.answer(db, item_id, body.verdict, body.species)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {'id': item_id, 'verdict': body.verdict, 'species': body.species}
+
+    @app.get('/api/review/{item_id}/image')
+    def review_image(item_id: str, db: Catalog = Depends(catalog)):
+        try:
+            path = review.image(db, item_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        # A moment's id never changes what it shows.
+        return FileResponse(path, media_type='image/jpeg', headers={'Cache-Control': 'private, max-age=31536000, immutable'})
 
     @app.get('/api/settings/processing')
     def get_processing(runner: JobRunner = Depends(runner_of)):
