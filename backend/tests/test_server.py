@@ -165,6 +165,30 @@ class ServerTests(unittest.TestCase):
                          'Summer tanager')
         self.assertEqual(self.client.get('/api/recordings/unknown/sightings').status_code, 404)
 
+    def test_gallery_rows_and_thumbnails(self):
+        self.process()
+        species = self.client.get('/api/species').json()[0]
+        self.assertEqual((species['photos'], species['featured']), (3, 1))
+        rows = self.client.get(f"/api/species/{species['species']}/photos").json()
+        self.assertEqual(len(rows), 1, 'best photos only by default')
+        row = rows[0]
+        self.assertIsInstance(row['evidence'], dict)
+        self.assertIn('recorded_at', row)
+        full = self.client.get(f"/api/photos/{row['path']}")
+        thumb = self.client.get(f"/api/photos/{row['path']}", params={'size': 'thumb'})
+        self.assertEqual(thumb.headers['content-type'], 'image/jpeg')
+        self.assertIn('immutable', thumb.headers['cache-control'])
+        import cv2
+        import numpy as np
+        decoded = cv2.imdecode(np.frombuffer(thumb.content, np.uint8), cv2.IMREAD_COLOR)
+        self.assertLessEqual(max(decoded.shape[:2]), 360)
+        self.assertTrue(full.content.startswith(b'\xff\xd8'))
+        cached = self.library / 'thumbs' / row['path']
+        self.assertTrue(cached.is_file(), 'thumbnail is cached on disk')
+        # Reprocessing replaces the results folder; its thumbnails go with it.
+        self.process()
+        self.assertFalse(cached.exists())
+
     def test_download_and_labels(self):
         download = self.client.get(f'/api/recordings/{self.identity}/video', params={'download': True})
         self.assertIn('attachment', download.headers['content-disposition'])

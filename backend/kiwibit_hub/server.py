@@ -302,17 +302,25 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
                db: Catalog = Depends(catalog)):
         limit = max(1, min(200, limit))
         rows = db.photos(name, max(0, offset), limit, best_only=not include_duplicates)
-        return [{key: row[key] for key in ('video_id', 'name', 'species', 'ms', 'track', 'similarity', 'path',
-                                           'sighting_id', 'quality', 'featured', 'start_ms', 'end_ms',
-                                           'evidence', 'ai_species', 'corrected')} for row in rows]
+        return [{**{key: row[key] for key in ('video_id', 'name', 'species', 'ms', 'track', 'similarity', 'path',
+                                              'sighting_id', 'quality', 'featured', 'start_ms', 'end_ms',
+                                              'ai_species', 'corrected')},
+                 'evidence': json.loads(row['evidence']) if row['evidence'] else None,
+                 'recorded_at': recorded_at(row['name'])} for row in rows]
 
     @app.get('/api/photos/{path:path}')
-    def photo(path: str):
+    def photo(path: str, size: str = 'full', db: Catalog = Depends(catalog)):
         results = (library / 'results').resolve()
         target = (library / path).resolve()
         if not target.is_relative_to(results) or target.suffix.lower() != '.jpg' or not target.is_file():
             raise HTTPException(404, 'Photo not found')
-        return FileResponse(target, media_type='image/jpeg')
+        if size == 'thumb':
+            try:
+                target = db.thumbnail(target.relative_to(library.resolve()).as_posix())
+            except (OSError, ValueError):
+                pass  # fall back to the full photo
+        # Result folders are immutable (a new analysis gets a new folder), so cache hard.
+        return FileResponse(target, media_type='image/jpeg', headers={'Cache-Control': 'private, max-age=31536000, immutable'})
 
     @app.post('/api/sightings/{sighting_id}/correction')
     def correct(sighting_id: str, body: CorrectionRequest, db: Catalog = Depends(catalog)):

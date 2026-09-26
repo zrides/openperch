@@ -75,7 +75,7 @@
       {#if sighting.photo}<img src="/api/photos/{sighting.photo}" alt="" class="thumb">{/if}
       <div>
         <h2 id="correct-title" class="serif">Correct this sighting</h2>
-        <p class="muted small">{context}{context ? ' · ' : ''}<span class="mono">{clock(sighting.start_ms)}–{clock(sighting.end_ms)}</span> · all {sighting.photos} photo{sighting.photos === 1 ? '' : 's'}</p>
+        <p class="muted small">{context}{context ? ' · ' : ''}<span class="mono">{clock(sighting.start_ms)}–{clock(sighting.end_ms)}</span>{#if sighting.photos > 0} · all {sighting.photos} photo{sighting.photos === 1 ? '' : 's'}{:else} · all its photos{/if}</p>
       </div>
     </header>
 

@@ -121,6 +121,42 @@ export interface Analysis {
 
 export const UNCERTAIN = 'Uncertain bird';
 
+export interface SpeciesSummary {
+  species: string;
+  photos: number;
+  videos: number;
+  featured: number;
+}
+
+export interface Photo {
+  video_id: string;
+  name: string;
+  species: string;
+  ms: number;
+  track: number;
+  similarity: number;
+  path: string;
+  sighting_id: string | null;
+  quality: number;
+  featured: number;
+  start_ms: number | null;
+  end_ms: number | null;
+  ai_species: string | null;
+  corrected: string | null;
+  evidence: Evidence | null;
+  recorded_at: string | null;
+}
+
+/** The sighting a gallery photo belongs to, in the shape the correction dialog uses. */
+export function photoSighting(photo: Photo): Sighting | null {
+  if (!photo.sighting_id || !photo.evidence) return null;
+  return {
+    id: photo.sighting_id, track: photo.track, start_ms: photo.start_ms ?? photo.ms, end_ms: photo.end_ms ?? photo.ms,
+    ai_species: photo.ai_species ?? photo.species, corrected: photo.corrected, evidence: photo.evidence,
+    photo: photo.path, photos: 0,
+  };
+}
+
 export interface Session {
   authenticated: boolean;
   user: string | null;

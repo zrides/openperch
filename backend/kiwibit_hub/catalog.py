@@ -181,7 +181,8 @@ class Catalog:
             self.db.execute("UPDATE videos SET status=?,error=? WHERE id=?", (status, error, identity))
 
     def species(self):
-        return self.db.execute("SELECT species,count(*) AS photos,count(DISTINCT video_id) AS videos FROM photos GROUP BY species ORDER BY species").fetchall()
+        return self.db.execute("""SELECT species, count(*) AS photos, count(DISTINCT video_id) AS videos,
+            sum(featured) AS featured FROM photos GROUP BY species ORDER BY species""").fetchall()
 
     def photos(self, species, offset=0, limit=100, best_only=False):
         filter_best = 'AND p.featured=1' if best_only else ''
@@ -370,3 +371,29 @@ class Catalog:
         results = (self.root / 'results').resolve()
         if resolved != results and resolved.is_relative_to(results) and resolved.is_dir():
             shutil.rmtree(resolved, ignore_errors=True)
+            # Cached gallery thumbnails mirror the results tree.
+            thumbs = (self.root / 'thumbs' / resolved.relative_to(self.root.resolve())).resolve()
+            if thumbs.is_dir():
+                shutil.rmtree(thumbs, ignore_errors=True)
+
+    def thumbnail(self, photo, size=360):
+        """A cached JPEG no larger than `size` pixels for a gallery photo (relative results path)."""
+        import cv2
+        source = (self.root / photo).resolve()
+        target = (self.root / 'thumbs' / photo).resolve()
+        if target.is_file() and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+            return target
+        image = cv2.imread(str(source))
+        if image is None:
+            raise ValueError('Unreadable photo')
+        scale = min(1.0, size / max(image.shape[:2]))
+        if scale < 1:
+            image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ok, encoded = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            raise ValueError('Could not encode thumbnail')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f'{target.stem}.{uuid.uuid4().hex}.tmp')
+        temporary.write_bytes(encoded.tobytes())
+        temporary.replace(target)
+        return target
