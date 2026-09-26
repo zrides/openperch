@@ -255,3 +255,14 @@ export interface ProcessingSettings {
   classifier_batch: number;
   choices: number[];
 }
+
+export interface FetchSchedule {
+  auto: boolean;
+  interval_minutes: number;
+  intervals: number[];
+  last_started: number | null;
+  last_finished: number | null;
+  last_message: string;
+  last_trigger: 'schedule' | 'manual' | null;
+  next_run: number | null;
+}

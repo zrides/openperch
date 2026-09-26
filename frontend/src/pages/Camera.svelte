@@ -1,11 +1,12 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
-  import { api, ApiError, type Camera, type CameraSetting, type CameraSettings, type ProcessingSettings } from '../lib/api';
+  import { api, ApiError, type Camera, type CameraSetting, type CameraSettings, type FetchSchedule, type ProcessingSettings } from '../lib/api';
   import { hub, signOut } from '../lib/hub.svelte';
 
   let camera = $state<Camera | null>(null);
   let settings = $state<CameraSettings | null>(null);
   let processing = $state<ProcessingSettings | null>(null);
+  let schedule = $state<FetchSchedule | null>(null);
   let error = $state('');
   let refreshing = $state(false);
   let saved = $state('');
@@ -14,11 +15,13 @@
     refreshing = true;
     error = '';
     const query = refresh ? '?refresh=true' : '';
-    const [cameraResult, settingsResult, processingResult] = await Promise.allSettled([
+    const [cameraResult, settingsResult, processingResult, scheduleResult] = await Promise.allSettled([
       api.get<Camera>(`/api/camera${query}`),
       api.get<CameraSettings>(`/api/camera/settings${query}`),
       api.get<ProcessingSettings>('/api/settings/processing'),
+      api.get<FetchSchedule>('/api/settings/fetch'),
     ]);
+    if (scheduleResult.status === 'fulfilled') schedule = scheduleResult.value;
     if (cameraResult.status === 'fulfilled') camera = cameraResult.value;
     if (settingsResult.status === 'fulfilled') settings = settingsResult.value;
     else error = (settingsResult.reason as Error).message;
@@ -41,6 +44,15 @@
       processing = await api.get<ProcessingSettings>('/api/settings/processing');
     }
   }
+
+  async function saveSchedule(change: { auto?: boolean; interval_minutes?: number }) {
+    try {
+      schedule = await api.put<FetchSchedule>('/api/settings/fetch', change);
+    } catch (e) {
+      saved = (e as Error).message;
+    }
+  }
+  const interval = (minutes: number) => (minutes < 60 ? `${minutes} minutes` : minutes === 60 ? '1 hour' : `${minutes / 60} hours`);
 
   const signal = $derived.by(() => {
     const dbm = settings?.status.wifi_dbm;
@@ -115,6 +127,27 @@
         {/each}
       </section>
     {/each}
+
+    <section class="card panel" aria-labelledby="fetch-title">
+      <h2 id="fetch-title" class="serif">Recordings from the cloud</h2>
+      {#if schedule}
+        <label class="line">
+          <span class="label">Fetch new recordings automatically<span class="muted small">Downloads and identifies new clips. Doesn't wake the camera.</span></span>
+          <input type="checkbox" class="switch" role="switch" checked={schedule.auto}
+                 onchange={(event) => saveSchedule({ auto: event.currentTarget.checked })}>
+        </label>
+        <label class="line">
+          <span class="label">Check every</span>
+          <select value={schedule.interval_minutes} disabled={!schedule.auto}
+                  onchange={(event) => saveSchedule({ interval_minutes: Number(event.currentTarget.value) })}>
+            {#each schedule.intervals as minutes (minutes)}<option value={minutes}>{interval(minutes)}</option>{/each}
+          </select>
+        </label>
+        {#if schedule.last_finished}
+          <p class="muted small">Last check {new Date(schedule.last_finished * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}: {schedule.last_message}</p>
+        {/if}
+      {/if}
+    </section>
 
     <section class="card panel" aria-labelledby="hub-ai-title">
       <h2 id="hub-ai-title" class="serif">Hub identification</h2>

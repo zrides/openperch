@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
-  import { api, ApiError, UNCERTAIN, type Recording, type SpeciesSummary } from '../lib/api';
+  import { api, ApiError, UNCERTAIN, type FetchSchedule, type Recording, type SpeciesSummary } from '../lib/api';
   import { dateTime, dayLabel, duration, timeOfDay } from '../lib/format';
   import { hub } from '../lib/hub.svelte';
 
@@ -8,12 +8,15 @@
   let species: SpeciesSummary[] = $state([]);
   let loaded = $state(false);
   let notice = $state('');
+  let schedule = $state<FetchSchedule | null>(null);
 
   async function load() {
-    const [rows, summaries] = await Promise.allSettled([
+    const [rows, summaries, fetchSchedule] = await Promise.allSettled([
       api.get<Recording[]>('/api/recordings'),
       api.get<SpeciesSummary[]>('/api/species'),
+      api.get<FetchSchedule>('/api/settings/fetch'),
     ]);
+    if (fetchSchedule.status === 'fulfilled') schedule = fetchSchedule.value;
     if (rows.status === 'fulfilled') recordings = rows.value;
     if (summaries.status === 'fulfilled') species = summaries.value;
     loaded = true;
@@ -94,6 +97,19 @@
     return `${today.length} recording${today.length === 1 ? '' : 's'} so far${latestBird ? ` · latest identified: ${latestBird} at ${timeOfDay(named!.recorded_at)}` : ''}`;
   });
 
+  const clockTime = (seconds: number) => new Date(seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const scheduleText = $derived.by(() => {
+    if (!schedule) return '';
+    const parts = [];
+    if (schedule.last_finished) parts.push(`Cloud last checked ${dateTime(new Date(schedule.last_finished * 1000).toISOString())}`);
+    if (schedule.auto && schedule.next_run) {
+      parts.push(schedule.next_run * 1000 <= Date.now() ? 'next check when the hub is free' : `next at ${clockTime(schedule.next_run)}`);
+    } else if (!schedule.auto) {
+      parts.push('automatic fetching is off');
+    }
+    return parts.join(' · ');
+  });
+
   async function fetchNow() {
     notice = '';
     try {
@@ -128,6 +144,7 @@
     </div>
   </header>
   {#if notice}<p class="notice" aria-live="polite">{notice}</p>{/if}
+  {#if scheduleText}<p class="muted small schedule">{scheduleText}</p>{/if}
 
   <a class="card live-card" href="#/live">
     <span>Watch the feeder live</span>
@@ -250,6 +267,7 @@
   .actions { display: flex; gap: 12px; flex-wrap: wrap; }
   .notice { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--spruce-soft); color: var(--spruce); font-size: 14px; }
   .small { font-size: 13px; }
+  .schedule { margin: -12px 0 0; }
   .live-card { display: none; }
 
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }

@@ -201,6 +201,18 @@ class ServerTests(unittest.TestCase):
         self.assertIn('Northern cardinal', labels)
         self.assertGreater(len(labels), 100)
 
+    def test_fetch_settings_and_manual_fetch_go_through_the_schedule(self):
+        settings = self.client.get('/api/settings/fetch').json()
+        self.assertEqual((settings['auto'], settings['interval_minutes']), (True, 30))
+        changed = self.client.put('/api/settings/fetch', json={'auto': False, 'interval_minutes': 60}).json()
+        self.assertEqual((changed['auto'], changed['interval_minutes'], changed['next_run']), (False, 60, None))
+        self.assertEqual(self.client.put('/api/settings/fetch', json={'interval_minutes': 5}).status_code, 422)
+        from unittest.mock import patch as _patch
+        with _patch.object(self.runner, 'start') as start:
+            self.assertEqual(self.client.post('/api/jobs', json={'action': 'fetch'}).status_code, 202)
+            start.assert_called_once_with('fetch')
+        self.assertEqual(self.client.get('/api/settings/fetch').json()['last_trigger'], 'manual')
+
     def test_status_summary(self):
         self.process()
         status = self.client.get('/api/status').json()

@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import urllib.error
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -29,6 +30,7 @@ from .engine import read_labels
 from .jobs import JobRunner
 from .kiwibit_api import KiwibitError
 from .live import LiveError, LiveManager
+from .scheduler import FetchScheduler, run_forever
 
 # Downloaded recordings are named <UTC start>_<digest>.mp4, e.g. 20260925T185753Z_3a88a9623053ee38.mp4.
 RECORDED_AT = re.compile(r'^(\d{8}T\d{6}Z)_')
@@ -78,6 +80,11 @@ class LiveOffer(BaseModel):
     sdp: str
 
 
+class FetchSettings(BaseModel):
+    auto: bool | None = None
+    interval_minutes: int | None = None
+
+
 class ProcessingSettings(BaseModel):
     detector_batch: int
     classifier_batch: int
@@ -113,7 +120,7 @@ def recorded_at(name):
 
 
 def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True,
-               live=None, camera=None, web=None, limiter=None):
+               live=None, camera=None, web=None, limiter=None, schedule_period=None):
     library = Path(library) if library is not None else config.LIBRARY
     media_root = Path(media_root) if media_root is not None else config.DATA
     web = Path(web) if web is not None else config.WEB
@@ -140,10 +147,16 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         app.state.camera = camera or CameraService()
         hub.loop = asyncio.get_running_loop()
         unsubscribe = app.state.runner.subscribe(hub.publish)
+        app.state.scheduler = FetchScheduler(app.state.runner, library / 'fetch-schedule.json')
+        stop_schedule = threading.Event()
+        if schedule_period:
+            threading.Thread(target=run_forever, args=(app.state.scheduler, stop_schedule, schedule_period),
+                             name='fetch-schedule', daemon=True).start()
         log.info('Hub started: library=%s', library)
         try:
             yield
         finally:
+            stop_schedule.set()
             unsubscribe()
             await asyncio.to_thread(app.state.live.shutdown)
             await asyncio.to_thread(app.state.runner.shutdown, 60)
@@ -204,6 +217,9 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
 
     def runner_of(request: Request) -> JobRunner:
         return request.app.state.runner
+
+    def scheduler_of(request: Request) -> FetchScheduler:
+        return request.app.state.scheduler
 
     def live_of(request: Request) -> LiveManager:
         return request.app.state.live
@@ -354,16 +370,33 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         return runner.state
 
     @app.post('/api/jobs', status_code=202)
-    def start_job(body: JobRequest, runner: JobRunner = Depends(runner_of)):
+    def start_job(body: JobRequest, runner: JobRunner = Depends(runner_of),
+                  scheduler: FetchScheduler = Depends(scheduler_of)):
         if body.action not in API_ACTIONS:
             raise HTTPException(422, f'action must be one of {sorted(API_ACTIONS)}')
         if body.action in ('selected', 'reanalyze') and not body.ids:
             raise HTTPException(422, 'Select at least one recording')
+        if body.action == 'fetch':
+            # Through the scheduler, so a manual fetch also resets the schedule.
+            if not scheduler.start('manual'):
+                raise HTTPException(409, 'Another library job is running')
+            return runner.state
         try:
             runner.start(body.action, body.ids)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return runner.state
+
+    @app.get('/api/settings/fetch')
+    def get_fetch_settings(scheduler: FetchScheduler = Depends(scheduler_of)):
+        return scheduler.status()
+
+    @app.put('/api/settings/fetch')
+    def put_fetch_settings(body: FetchSettings, scheduler: FetchScheduler = Depends(scheduler_of)):
+        try:
+            return scheduler.configure(body.auto, body.interval_minutes)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.post('/api/jobs/cancel', status_code=202)
     def cancel_job(runner: JobRunner = Depends(runner_of)):
@@ -458,4 +491,4 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
 
 def build_app():
     """Entry point for `uvicorn --factory kiwibit_hub.server:build_app`; tests use create_app()."""
-    return create_app(credentials=Credentials.from_env())
+    return create_app(credentials=Credentials.from_env(), schedule_period=30)

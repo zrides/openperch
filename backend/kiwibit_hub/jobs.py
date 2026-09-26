@@ -98,8 +98,14 @@ class LibraryJob:
                     self.progress(index+1, len(paths))
                 self.changed()
             if self.action != 'scan':
-                rows = [row for row in db.videos() if (row['id'] in self.paths if self.action in ('selected', 'reanalyze')
-                                                       else row['status'] != 'ready')]
+                if self.action in ('selected', 'reanalyze'):
+                    rows = [row for row in db.videos() if row['id'] in self.paths]
+                elif self.action == 'process':
+                    rows = [row for row in db.videos() if row['status'] != 'ready']  # includes retrying failures
+                else:
+                    # Fetch/import process new recordings only; a failure that repeats
+                    # must not cost GPU time on every scheduled fetch.
+                    rows = [row for row in db.videos() if row['status'] == 'pending']
                 labels = read_labels(self.labels)
                 failures += self.process_rows(db, rows, labels)
             if failures:

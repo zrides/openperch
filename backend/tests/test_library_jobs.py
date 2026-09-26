@@ -31,6 +31,32 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(len(db.videos()), 1)
             db.close()
 
+    def test_fetch_processes_new_recordings_but_not_past_failures(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            labels = root / 'labels.txt'
+            labels.write_text('bird\nsquirrel')
+            db = Catalog(root / 'library', root)
+            ids = {}
+            for name in ('new', 'failed', 'done'):
+                video = root / f'{name}.mp4'
+                video.write_bytes(name.encode())
+                ids[name] = db.ingest(video)
+            db.state(ids['failed'], 'failed', 'decoder error')
+            db.state(ids['done'], 'ready')
+            engine = Mock()
+            engine.analyze.side_effect = RuntimeError('stop here')
+            for action, expected in (('fetch', {'new'}), ('process', {'new', 'failed'})):
+                engine.analyze.reset_mock()
+                db.state(ids['new'], 'pending')
+                db.state(ids['failed'], 'failed', 'decoder error')
+                job = LibraryJob(action, [], root, labels, db.root, engine, media_root=root, downloads=root / 'downloads')
+                with patch.object(job, 'fetch', return_value=0):
+                    job.run()
+                analyzed = {Path(call.args[0]).stem for call in engine.analyze.call_args_list}
+                self.assertEqual(analyzed, expected, action)
+            db.close()
+
     def test_cancelled_queue_keeps_video_pending(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
