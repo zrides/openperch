@@ -103,6 +103,8 @@ class Catalog:
                                       ('featured', 'INTEGER NOT NULL DEFAULT 1')]:
                 if name not in photo_columns:
                     self.db.execute(f'ALTER TABLE photos ADD COLUMN {name} {declaration}')
+            # Each sighting's best photo; without it every lookup scans all photos.
+            self.db.execute('CREATE INDEX IF NOT EXISTS photos_sighting ON photos(sighting_id, quality)')
 
     def close(self):
         self.db.close()

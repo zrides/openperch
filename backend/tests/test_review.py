@@ -74,6 +74,12 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             review.build(self.db)
 
+    def test_best_photo_lookup_uses_an_index(self):
+        # Without one, picking moments took minutes on the hub's Docker data volume.
+        plan = ' '.join(str(row[-1]) for row in self.db.db.execute(
+            'EXPLAIN QUERY PLAN SELECT ms FROM photos WHERE sighting_id=? ORDER BY quality DESC LIMIT 1', ('x',)))
+        self.assertIn('photos_sighting', plan)
+
     def test_items_hide_the_ai_guess_and_a_recording_gives_at_most_two_moments(self):
         review.build(self.db, seed=1)
         items = review.items(self.db)
