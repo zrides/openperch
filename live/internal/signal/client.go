@@ -56,6 +56,9 @@ type Client struct {
 
 	mu                sync.Mutex
 	closed            chan struct{}
+	closeOnce         sync.Once
+	onClosed          func(reason string)
+	notifyOnce        sync.Once
 	candidateMu       sync.Mutex
 	pendingCandidates []message
 	answerReceived    bool
@@ -98,17 +101,32 @@ func (c *Client) Connect() error {
 	return nil
 }
 
-// Close shuts down the WebSocket connection.
-func (c *Client) Close() {
+// SetOnClosed registers a callback for an unexpected end of signaling: an
+// authentication failure or a dropped connection. It is not called for Close.
+func (c *Client) SetOnClosed(fn func(reason string)) {
+	c.onClosed = fn
+}
+
+func (c *Client) notifyClosed(reason string) {
 	select {
 	case <-c.closed:
-		return
+		return // we closed it ourselves
 	default:
+	}
+	if c.onClosed != nil {
+		c.notifyOnce.Do(func() { c.onClosed(reason) })
+	}
+}
+
+// Close shuts down the WebSocket connection. Safe to call more than once and
+// from several goroutines.
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
 		close(c.closed)
-	}
-	if c.conn != nil {
-		c.conn.Close()
-	}
+		if c.conn != nil {
+			c.conn.Close()
+		}
+	})
 }
 
 func (c *Client) sendJSON(msg any) {
@@ -274,6 +292,7 @@ func (c *Client) readLoop() {
 				return
 			default:
 				log.Printf("[signal] read error: %v", err)
+				c.notifyClosed("signaling connection closed")
 				return
 			}
 		}
@@ -303,6 +322,7 @@ func (c *Client) dispatch(msg message) {
 				code = *msg.Code
 			}
 			log.Printf("[signal] auth failed: code=%d", code)
+			c.notifyClosed(fmt.Sprintf("signaling authentication failed (code %d)", code))
 		}
 
 	case "JOIN_LIVE_RESPONSE":

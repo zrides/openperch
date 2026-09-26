@@ -7,11 +7,14 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"vico_home/native/internal/domain"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 	pion "github.com/pion/webrtc/v4"
 )
 
@@ -22,6 +25,7 @@ type Peer struct {
 	serialNumber  string
 	resolution    string
 	remoteDescSet chan struct{}
+	videoSSRC     atomic.Uint32
 }
 
 // NewPeer creates a PeerConnection with minimal codec registration and a DataChannel.
@@ -142,17 +146,62 @@ func (p *Peer) SetOnTrack(videoOut io.Writer) {
 		if track.Kind() == pion.RTPCodecTypeVideo {
 			go p.readVideoTrack(track, videoOut)
 		} else {
-			go func() {
-				buf := make([]byte, 1500)
-				for {
-					_, _, err := track.Read(buf)
-					if err != nil {
-						return
-					}
-				}
-			}()
+			go drain(track)
 		}
 	})
+}
+
+// SetOnVideoRTP hands every received video RTP packet to onPacket; audio is drained.
+func (p *Peer) SetOnVideoRTP(onPacket func(*rtp.Packet)) {
+	p.pc.OnTrack(func(track *pion.TrackRemote, receiver *pion.RTPReceiver) {
+		codec := track.Codec()
+		log.Printf("[webrtc] got track: kind=%s codec=%s pt=%d", track.Kind(), codec.MimeType, codec.PayloadType)
+		if track.Kind() != pion.RTPCodecTypeVideo {
+			go drain(track)
+			return
+		}
+		p.videoSSRC.Store(uint32(track.SSRC()))
+		go func() {
+			for {
+				pkt, _, err := track.ReadRTP()
+				if err != nil {
+					log.Printf("[webrtc] video track read error: %v", err)
+					return
+				}
+				onPacket(pkt)
+			}
+		}()
+	})
+}
+
+// RequestKeyframe asks the camera for a new IDR frame (RTCP PLI).
+func (p *Peer) RequestKeyframe() {
+	ssrc := p.videoSSRC.Load()
+	if ssrc == 0 {
+		return
+	}
+	if err := p.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}}); err != nil {
+		log.Printf("[webrtc] keyframe request failed: %v", err)
+	}
+}
+
+// OnFailed calls fn once when the camera connection fails or closes.
+func (p *Peer) OnFailed(fn func(state string)) {
+	p.pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
+		log.Printf("[webrtc] peer connection state: %s", state.String())
+		if state == pion.PeerConnectionStateFailed || state == pion.PeerConnectionStateClosed {
+			fn(state.String())
+		}
+	})
+}
+
+func drain(track *pion.TrackRemote) {
+	buf := make([]byte, 1500)
+	for {
+		if _, _, err := track.Read(buf); err != nil {
+			return
+		}
+	}
 }
 
 func (p *Peer) readVideoTrack(track *pion.TrackRemote, w io.Writer) {
