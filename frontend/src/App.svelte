@@ -6,18 +6,15 @@
   import Recordings from './pages/Recordings.svelte';
   import Birds from './pages/Birds.svelte';
   import Home from './pages/Home.svelte';
-  import ComingSoon from './pages/ComingSoon.svelte';
+  import Camera from './pages/Camera.svelte';
 
-  const pages: Record<string, { title: string; summary: string }> = {
-    camera: { title: 'Camera', summary: 'Camera status, motion and recording settings, activity zone and notifications.' },
-  };
-  const BUILT = ['home', 'live', 'recordings', 'birds'];
+  const ROUTES = ['home', 'live', 'recordings', 'birds', 'camera'];
 
   // #/<page>[/<id>][?t=<ms>]
   function parse() {
     const [path, search = ''] = location.hash.replace(/^#\/?/, '').split('?');
     const [page, id = null] = path.split('/');
-    const known = BUILT.includes(page) || page in pages;
+    const known = ROUTES.includes(page);
     return {
       route: known ? page : 'home',
       id: known && id ? decodeURIComponent(id) : null,
@@ -51,8 +48,8 @@
       <Recordings id={current.id} startMs={current.startMs} />
     {:else if route === 'birds'}
       <Birds species={current.id} />
-    {:else}
-      {#key route}<ComingSoon {...pages[route]} />{/key}
+    {:else if route === 'camera'}
+      <Camera />
     {/if}
   </main>
 </div>

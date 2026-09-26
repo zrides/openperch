@@ -35,6 +35,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown = {}) => request<T>('POST', path, body),
+  put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
 };
 
 export type LiveState = 'idle' | 'starting' | 'waking' | 'signaling' | 'joining' | 'connecting' | 'streaming' | 'ended';
@@ -222,4 +223,35 @@ export function subscribe(onEvent: (event: HubEvent) => void): () => void {
     clearTimeout(timer);
     socket?.close();
   };
+}
+
+export interface CameraSetting {
+  name: string;
+  label: string;
+  description: string;
+  type: 'SWITCH' | 'ENUM' | 'TEXT' | 'INT_RANGE' | string;
+  value: unknown;
+  disabled: boolean;
+  options: { value: string | number; label: string; disabled: boolean }[];
+}
+
+export interface CameraSettings {
+  status: {
+    battery: number | null;
+    wifi_dbm: number | null;
+    wifi_level: number | null;
+    firmware: string | null;
+    online: boolean;
+    awake: boolean;
+  };
+  groups: { title: string; settings: CameraSetting[] }[];
+  bird_ai: { analyze: boolean | null; notify: boolean | null };
+  activity_zones: number | null;
+  writable: boolean;
+}
+
+export interface ProcessingSettings {
+  detector_batch: number;
+  classifier_batch: number;
+  choices: number[];
 }

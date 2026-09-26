@@ -101,6 +101,32 @@ class FakeClient:
     def wake(self, serial):
         self.woken.append(serial)
 
+    # Shapes as the live camera reports them.
+    def device_attributes(self, serial):
+        return {'modifiableAttributes': [
+            {'name': 'pirSwitch', 'value': True, 'disabled': False, 'type': 'SWITCH'},
+            {'name': 'pirSensitivity', 'value': 'high', 'options': ['high', 'mid', 'low'], 'disabledOptions': [], 'type': 'ENUM'},
+            {'name': 'pirRecordTime', 'value': '60s', 'options': ['10s', '15s', '20s', '60s'],
+             'disabledOptions': ['120s', '180s'], 'type': 'ENUM'},
+            {'name': 'location', 'type': 'OBJECT_ENUM', 'value': {'id': '1', 'text': 'Backyard'},
+             'options': [{'id': '1', 'text': 'Backyard'}, {'id': '2', 'text': 'Front door'}]},
+            {'name': 'voiceVolume', 'type': 'INT_RANGE', 'value': 100},
+            {'name': 'deviceName', 'type': 'TEXT', 'value': 'Birdy McFeedface'},
+            {'name': 'criticalAlerts', 'type': 'SWITCH', 'value': False},
+            {'name': 'criticalAlerts', 'type': 'SWITCH', 'value': True},
+            {'name': 'chargeAutoPowerOnCapacity', 'type': 'ENUM', 'value': '10pct', 'options': ['10pct']},
+            {'name': 'newFeature', 'value': 3, 'type': 'NUMBER'},
+        ]}
+
+    def bird_ai_setting(self, serial):
+        return {'aiNotifySwitch': True, 'aiAnalyzeSwitch': True}
+
+    def activity_zones(self, serial):
+        raise OSError('temporarily unavailable')
+
+    def device(self, serial):
+        return {'wifiPowerLevel': 5, 'wifiPowerDbm': None, 'signalStrength': -61, 'signalLevel': 3}
+
 
 class LiveApiTests(unittest.TestCase):
     def setUp(self):
@@ -131,6 +157,29 @@ class LiveApiTests(unittest.TestCase):
         self.assertNotIn('userSn', camera)
         self.assertEqual(self.client.post('/api/camera/wake').status_code, 202)
         self.assertEqual(self.client_api.woken, ['cam-1'])
+
+    def test_camera_settings_are_read_grouped_and_described(self):
+        settings = self.client.get('/api/camera/settings').json()
+        self.assertFalse(settings['writable'])
+        self.assertEqual((settings['status']['wifi_dbm'], settings['status']['wifi_level']), (-61, 3))
+        groups = {g['title']: {x['name']: x for x in g['settings']} for g in settings['groups']}
+        self.assertEqual(list(groups), ['Motion and recording', 'Sound and alarm', 'AI and notifications',
+                                        'Power and network', 'Device', 'Other'])
+        motion = groups['Motion and recording']
+        self.assertEqual(motion['pirSwitch']['label'], 'Motion detection')
+        self.assertEqual([o['label'] for o in motion['pirSensitivity']['options']], ['High', 'Medium', 'Low'])
+        self.assertEqual([(o['value'], o['disabled']) for o in motion['pirRecordTime']['options']],
+                         [('10s', False), ('15s', False), ('20s', False), ('60s', False), ('120s', True), ('180s', True)])
+        location = groups['Device']['location']
+        self.assertEqual((location['type'], location['value']), ('ENUM', '1'))
+        self.assertEqual([o['label'] for o in location['options']], ['Backyard', 'Front door'])
+        self.assertEqual(groups['Device']['deviceName']['value'], 'Birdy McFeedface')
+        self.assertEqual(groups['Sound and alarm']['voiceVolume']['type'], 'INT_RANGE')
+        self.assertIs(groups['AI and notifications']['criticalAlerts']['value'], False, 'duplicates: first wins')
+        self.assertEqual(groups['Power and network']['chargeAutoPowerOnCapacity']['options'][0]['label'], '10%')
+        self.assertEqual(groups['Other']['newFeature']['label'], 'newFeature', 'unknown settings still appear')
+        self.assertEqual(settings['bird_ai'], {'analyze': True, 'notify': True})
+        self.assertIsNone(settings['activity_zones'], 'a failing section degrades instead of failing the page')
 
     def test_live_round_trip_through_api(self):
         self.assertEqual(self.client.get('/api/live').json()['state'], 'idle')

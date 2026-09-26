@@ -96,6 +96,23 @@ class KiwibitClient:
             {"serialNumber": serial, "supportBindFlow": 0, "list": []},
         )
 
+    def device_attributes(self, serial):
+        """The camera's changeable settings, self-described: name, type, value, options."""
+        return self.post(
+            "/device/getDeviceAttributes",
+            {"serialNumber": serial, "returnModifiableAttributes": True,
+             "returnFixedAttributes": False, "returnRealTimeAttributes": False},
+        )
+
+    def bird_ai_setting(self, serial):
+        return self.post("/birdLovers/queryBirdAiSetting", {"serialNumber": serial, "includeBird": True})
+
+    def activity_zones(self, serial):
+        return self.post(
+            "/device/getactivityzone",
+            {"serialNumber": serial, "supportBindFlow": 0, "list": []},
+        )
+
     def push_images(self):
         """Latest motion-triggered snapshot per device (presigned URLs)."""
         return self.post("/device/devicePushImage")

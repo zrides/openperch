@@ -380,6 +380,16 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             log.warning('Camera lookup failed: %s', exc)
             raise HTTPException(502, 'Could not reach the Kiwibit service. Check the account token.') from exc
 
+    @app.get('/api/camera/settings')
+    def camera_settings(refresh: bool = False, camera: CameraService = Depends(camera_of)):
+        try:
+            return camera.settings(refresh)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except CLOUD_ERRORS as exc:
+            log.warning('Camera settings failed: %s', exc)
+            raise HTTPException(502, 'Could not reach the Kiwibit service. Check the account token.') from exc
+
     @app.post('/api/camera/wake', status_code=202)
     def wake_camera(camera: CameraService = Depends(camera_of)):
         try:
