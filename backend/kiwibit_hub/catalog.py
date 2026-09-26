@@ -329,20 +329,25 @@ class Catalog:
                                      max(0, int(x1*width)):min(width, int(x2*width))]
                         if not crop.size:
                             continue
-                        filename = f"{view['frame']}-{animal['id']}.jpg"
-                        view['path'] = str(relative / filename)
                         # Bound queued image memory independently of clip length.
                         if len(pending) >= workers*2:
                             finish_one()
-                        pending.append((view, pool.submit(encode_photo, crop.copy(), animal['box'], folder/filename, cancel)))
+                        if view['photo']:
+                            filename = f"{view['frame']}-{animal['id']}.jpg"
+                            view['path'] = str(relative / filename)
+                            pending.append((view, pool.submit(encode_photo, crop.copy(), animal['box'], folder/filename, cancel)))
+                        else:
+                            # A species view between photos: its sharpness still weights its vote.
+                            pending.append((view, pool.submit(photo_quality, crop.copy(), animal['box'])))
                 while pending:
                     check_cancel(cancel)
                     finish_one()
             for group in groups:
-                group['views'] = [v for v in group['views'] if 'path' in v]
+                group['views'] = [v for v in group['views'] if 'quality' in v]
                 group['evidence'] = summarize(group['views'], NONBIRD_LABELS)
-                featured = best_photos(group['views'])
-                for view in group['views']:
+                photographed = [v for v in group['views'] if 'path' in v]
+                featured = best_photos(photographed)
+                for view in photographed:
                     photos.append((identity, group['evidence']['species'], view['ms'], group['track'],
                                    group['evidence']['similarity'], view['path'], group['id'],
                                    view['quality'], int(view['path'] in featured)))

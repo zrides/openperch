@@ -140,6 +140,61 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(len(group['views']), 2)
         self.assertEqual(group['end_ms'], 1100)
 
+    def split_by_a_miss(self, first, later, gap_ms=500):
+        """Detections at 0 ms, then nothing until gap_ms, then three frames: the tracker makes two tracks."""
+        tracker = TemporalTracker()
+        frames = [{'ms': 0, 'animals': tracker.update(first, 0)}]
+        for ms in range(100, gap_ms, 100):
+            frames.append({'ms': ms, 'animals': tracker.update([], ms)})
+        for ms in range(gap_ms, gap_ms+300, 100):
+            frames.append({'ms': ms, 'animals': tracker.update(copy.deepcopy(later), ms)})
+        return tracker, frames
+
+    def test_a_brief_miss_is_stitched_into_one_track(self):
+        tracker, frames = self.split_by_a_miss([detection(.2)], [detection(.21)])
+        self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2)
+        stats = tracker.finalize(frames)
+        animals = [a for f in frames for a in f['animals']]
+        self.assertEqual(stats['stitched'], 1)
+        self.assertEqual({a['id'] for a in animals}, {animals[0]['id']})
+        self.assertNotIn('tracklet', animals[0])
+        self.assertTrue(all('tracklet' in a for a in animals[1:]))
+        # The one-frame start was never confirmed on its own; joined, it belongs to a confirmed track.
+        self.assertTrue(all(a['track_confirmed'] for a in animals))
+        self.assertEqual(len(collect_sightings(frames)), 1)
+
+    def test_a_different_species_arriving_is_not_stitched(self):
+        finch = dict(detection(.2), ranked=[{'label': 'House finch', 'similarity': .5}])
+        titmouse = dict(detection(.21), ranked=[{'label': 'Tufted titmouse', 'similarity': .5}])
+        tracker, frames = self.split_by_a_miss([finch], [titmouse])
+        tracker.finalize(frames)
+        self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2)
+
+    def test_two_birds_side_by_side_each_keep_their_own_continuation(self):
+        tracker, frames = self.split_by_a_miss([detection(.30), detection(.42)], [detection(.31), detection(.41)])
+        tracker.finalize(frames)
+        def side(animal):
+            return 'left' if animal['box'][0] < .3 else 'right'
+        tracks = {}
+        for frame in frames:
+            for animal in frame['animals']:
+                tracks.setdefault(animal['id'], set()).add(side(animal))
+        self.assertEqual(sorted(map(sorted, tracks.values())), [['left'], ['right']])
+
+    def test_late_or_distant_starts_are_not_stitched(self):
+        for first, later, gap in [([detection(.2)], [detection(.21)], 1700), ([detection(.2)], [detection(.5)], 500)]:
+            tracker, frames = self.split_by_a_miss(first, later, gap)
+            tracker.finalize(frames)
+            self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2, (later[0]['box'], gap))
+
+    def test_retracking_a_stitched_result_stitches_it_the_same_way(self):
+        tracker, frames = self.split_by_a_miss([detection(.2, appearance=[1., 0.])], [detection(.21, appearance=[1., 0.])])
+        result = {'frames': frames, 'tracking_stats': tracker.finalize(frames), 'tracker_version': 1}
+        again = retrack_result(result)
+        self.assertEqual([[a['id'] for a in f['animals']] for f in again['frames']],
+                         [[a['id'] for a in f['animals']] for f in frames])
+        self.assertEqual(again['tracking_stats']['stitched'], 1)
+
     def test_bad_timestamps_rejected(self):
         tracker = TemporalTracker()
         tracker.update([], 100)

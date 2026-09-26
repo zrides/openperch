@@ -4,6 +4,7 @@ Low-score detections can support existing tracks, never create new ones. Predict
 boxes are used for matching only: output boxes always come from the detector.
 Tracks follow the animal, not the detector's label: YOLO-World renames the same
 animal between frames, so each track's category is decided once from all its frames.
+After the clip, tracks split by a brief miss are joined again (stitch_tracks).
 This is a small custom tracker, not the ByteTrack implementation or bird re-ID.
 """
 from __future__ import annotations
@@ -14,13 +15,17 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 
-TRACKER_VERSION = 2
+TRACKER_VERSION = 3
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
 MAX_GAP_MS = 1200
 NONBIRD_LABELS = set((Path(__file__).parent / 'nonbird-labels.txt').read_text(encoding='utf-8-sig').splitlines())
 # BioCLIP separates birds from other animals far more reliably than the detector's labels.
 CLASSIFIER_WEIGHT = .75
+# Joining a track to one that starts soon after it ends (see stitch_tracks).
+STITCH_MAX_GAP_MS = 1500
+STITCH_MAX_SIZE_RATIO = 6
+STITCH_MIN_SCORE = .55
 
 
 def overlap(a, b):
@@ -134,6 +139,75 @@ def resolve_categories(frames, labels=None, nonbirds=NONBIRD_LABELS):
     for frame in frames:
         for animal in frame['animals']:
             animal['category'] = resolved[animal['id']]
+
+
+def _pieces(frames):
+    """Each track's first and last sighting, colors, and summed species similarities."""
+    pieces = {}
+    for index, frame in enumerate(frames):
+        for animal in frame['animals']:
+            piece = pieces.get(animal['id'])
+            if piece is None:
+                piece = pieces[animal['id']] = {'first': (index, frame['ms'], animal), 'species': defaultdict(float)}
+            piece['last'] = (index, frame['ms'], animal)
+            for rank in animal.get('ranked') or []:
+                piece['species'][rank['label']] += rank.get('similarity', 0)
+    for piece in pieces.values():
+        species = piece.pop('species')
+        piece['top'] = set(sorted(species, key=lambda label: (-species[label], label))[:3])
+    return pieces
+
+
+def stitch_score(earlier, later):
+    """How likely `later` continues `earlier` after a short gap; -1 when it can't."""
+    _, end_ms, last = earlier['last']
+    _, start_ms, first = later['first']
+    gap = start_ms-end_ms
+    if not 0 < gap <= STITCH_MAX_GAP_MS:
+        return -1.
+    # Species guesses from different crops must share a name: never join a chickadee
+    # that left to a titmouse that arrived, or a bird to a squirrel.
+    if earlier['top'] and later['top'] and not earlier['top'] & later['top']:
+        return -1.
+    a, b = last['box'], first['box']
+    size = max(a[2]-a[0], a[3]-a[1], b[2]-b[0], b[3]-b[1], .02)
+    ca, cb = center(a), center(b)
+    distance = math.hypot(ca[0]-cb[0], ca[1]-cb[1])/size
+    ratio = ((b[2]-b[0])*(b[3]-b[1]))/max(1e-8, (a[2]-a[0])*(a[3]-a[1]))
+    if distance > 1. or not 1/STITCH_MAX_SIZE_RATIO <= ratio <= STITCH_MAX_SIZE_RATIO:
+        return -1.
+    appearance = appearance_similarity(last.get('appearance'), first.get('appearance'))
+    if appearance is not None and appearance < .6:
+        return -1.
+    return (.35*math.exp(-distance*distance/.5) + .25*math.exp(-gap/1000)
+            + .25*(.5 if appearance is None else appearance) + .15*math.exp(-abs(math.log(ratio))/2))
+
+
+def stitch_tracks(frames):
+    """Join tracks the frame-by-frame tracker split: the same animal, briefly missed.
+
+    Offline, over the whole clip. Each track gets at most one continuation and one
+    predecessor, by best total score, so two birds never share one. Returns the
+    joined track numbers as {old: new}; boxes stay the detector's.
+    """
+    pieces = _pieces(frames)
+    ids = sorted(pieces)
+    matrix = [[stitch_score(pieces[a], pieces[b]) if a != b else -1. for b in ids] for a in ids]
+    successor = {ids[row]: ids[column] for row, column in global_assignment(matrix, STITCH_MIN_SCORE)}
+    predecessor = {later: earlier for earlier, later in successor.items()}
+    joined = {}
+    for track in ids:
+        root = track
+        while root in predecessor:
+            root = predecessor[root]
+        if root != track:
+            joined[track] = root
+    for frame in frames:
+        for animal in frame['animals']:
+            if animal['id'] in joined:
+                animal['tracklet'] = animal['id']
+                animal['id'] = joined[animal['id']]
+    return joined
 
 
 @dataclass
@@ -265,11 +339,14 @@ class TemporalTracker:
         return outputs
 
     def finalize(self, frames, labels=None):
+        joined = stitch_tracks(frames)
+        # A joined track is confirmed when any of its pieces was.
+        confirmed = self.confirmed_ids | {joined[track] for track in self.confirmed_ids if track in joined}
         resolve_categories(frames, labels)
         for frame in frames:
             for animal in frame['animals']:
-                animal['track_confirmed'] = animal['id'] in self.confirmed_ids
-        return dict(self.stats, confirmed_tracks=len(self.confirmed_ids))
+                animal['track_confirmed'] = animal['id'] in confirmed
+        return dict(self.stats, confirmed_tracks=len(self.confirmed_ids), stitched=len(joined))
 
 
 def retrack_result(result, cancel=None, video=None, status=None, progress=None):
@@ -312,7 +389,7 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
                 animal['category'] = animal.pop('detector_category', animal['category'])
                 if image is not None:
                     animal['appearance'] = appearance_descriptor(image, animal['box'])
-                for key in ('display_label', 'identification_note', 'sighting_id'):
+                for key in ('display_label', 'identification_note', 'sighting_id', 'tracklet'):
                     animal.pop(key, None)
             frame['animals'] = tracker.update(frame['animals'], frame['ms'])
             if progress and index % 15 == 0:

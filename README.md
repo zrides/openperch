@@ -165,6 +165,14 @@ To run analysis natively, install PyTorch from
 to `../data`; set `KIWIBIT_DATA_DIR`, `KIWIBIT_BIOCLIP_DIR` and
 `KIWIBIT_ACCOUNT_CONFIG` to change them.
 
+To measure a tracking or sighting change before deploying it, compare variants
+against the saved analyses and the "Check the AI" answers. It reads a copy of
+the catalog, runs no models and changes nothing (about 30 seconds for 800 clips):
+
+```powershell
+.venv\Scripts\python.exe -m kiwibit_hub.evaluate --library ..\data\library
+```
+
 ## Notes
 
 - The server must run as a single process (`--workers 1`). It owns the GPU

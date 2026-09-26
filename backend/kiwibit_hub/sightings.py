@@ -8,8 +8,13 @@ import math
 
 from .engine import iou
 
-SMART_VERSION = 4
+SMART_VERSION = 5
 UNCERTAIN = 'Uncertain bird'
+# Species views are sampled at least this far apart within a sighting. The engine
+# classifies each track every 500 ms, so this uses every classification.
+VIEW_GAP_MS = 500
+# Gallery photos are saved from views at least this far apart; closer ones are near duplicates.
+PHOTO_GAP_MS = 1000
 
 
 def collect_sightings(frames):
@@ -28,8 +33,10 @@ def collect_sightings(frames):
                 active[track] = group
             group['end_ms'] = frame['ms']
             # Sample independent moments instead of counting repeated frame ranks.
-            if animal.get('tracking_state') != 'weak' and (not group['views'] or frame['ms'] - group['views'][-1]['ms'] >= 1000):
-                group['views'].append({'frame': index, 'ms': frame['ms'], 'animal': animal})
+            if animal.get('tracking_state') != 'weak' and (not group['views'] or frame['ms'] - group['views'][-1]['ms'] >= VIEW_GAP_MS):
+                last_photo = next((view['ms'] for view in reversed(group['views']) if view['photo']), None)
+                group['views'].append({'frame': index, 'ms': frame['ms'], 'animal': animal,
+                                       'photo': last_photo is None or frame['ms'] - last_photo >= PHOTO_GAP_MS})
     return groups
 
 

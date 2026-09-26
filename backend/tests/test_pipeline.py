@@ -78,7 +78,8 @@ class VideoPipelineTests(unittest.TestCase):
         with patch('cv2.VideoCapture', Capture):
             self.db.save_analysis(identity, changed, threading.Event())
         self.assertEqual(grabs, list(range(21)))
-        self.assertEqual(retrieved, [0, 10, 20])
+        # Species views every 500 ms are decoded once each; photos are saved once a second.
+        self.assertEqual(retrieved, [0, 5, 10, 15, 20])
         self.assertEqual(len(self.db.photos('Northern cardinal')), 6)
 
     def test_batched_engine_preserves_causal_classifications_and_track_order(self):

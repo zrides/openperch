@@ -56,7 +56,9 @@ class SightingLogicTests(unittest.TestCase):
         frames = [{'ms': i*100, 'animals': [view(track=1)['animal'], view(track=2)['animal']]} for i in range(21)]
         groups = collect_sightings(frames)
         self.assertEqual(len(groups), 2)
-        self.assertEqual([len(g['views']) for g in groups], [3, 3])
+        # 21 frames give one view per classification (500 ms), not 21 votes; a photo per second.
+        self.assertEqual([len(g['views']) for g in groups], [5, 5])
+        self.assertEqual([sum(v['photo'] for v in g['views']) for g in groups], [3, 3])
         frames.append({'ms': 5000, 'animals': [view(track=1)['animal']]})
         self.assertEqual(len(collect_sightings(frames)), 3)
 
