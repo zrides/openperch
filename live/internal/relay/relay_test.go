@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -193,6 +195,81 @@ func TestSessionEndsWithoutViewersOrVideo(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("stalled session did not end")
+	}
+}
+
+func TestCandidateSummaryHidesAddresses(t *testing.T) {
+	offer := "v=0\r\n" +
+		"a=candidate:1 1 UDP 2122 3f1c9d2e-aaaa.local 51000 typ host\r\n" +
+		"a=candidate:2 1 udp 2122 192.168.1.20 51001 typ host\r\n" +
+		"a=candidate:3 1 udp 1686 203.0.113.9 51002 typ srflx raddr 0.0.0.0 rport 0\r\n" +
+		"a=candidate:4 1 TCP 1518 3f1c9d2e-aaaa.local 9 typ host tcptype active\r\n" +
+		"a=candidate:5 1 UDP 2122 3f1c9d2e-bbbb.local 51003 typ host\r\n"
+	got := summarizeCandidates(offer)
+	want := "udp/host/mdns×2 udp/host/ipv4×1 udp/srflx/ipv4×1 tcp/host/mdns×1"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "192.168") || strings.Contains(got, "203.0") {
+		t.Fatal("summary must not include addresses")
+	}
+	if summarizeCandidates("v=0\r\n") != "none (the browser offered no ICE candidates)" {
+		t.Fatal("empty offer summary")
+	}
+}
+
+func TestExtraHostsAreAddedForEachUDPHostCandidate(t *testing.T) {
+	answer := "v=0\r\n" +
+		"a=candidate:111 1 udp 2130706431 192.168.1.20 8766 typ host\r\n" +
+		"a=candidate:222 1 udp 1694498815 203.0.113.9 8766 typ srflx raddr 0.0.0.0 rport 8766\r\n" +
+		"a=end-of-candidates\r\n"
+	got := withExtraHosts(answer, []string{"192.168.1.20", "127.0.0.1", "10.0.0.5"})
+	want := "v=0\r\n" +
+		"a=candidate:111 1 udp 2130706431 192.168.1.20 8766 typ host\r\n" +
+		"a=candidate:111x1 1 udp 2130706430 127.0.0.1 8766 typ host\r\n" +
+		"a=candidate:111x2 1 udp 2130706429 10.0.0.5 8766 typ host\r\n" +
+		"a=candidate:222 1 udp 1694498815 203.0.113.9 8766 typ srflx raddr 0.0.0.0 rport 8766\r\n" +
+		"a=end-of-candidates\r\n"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if withExtraHosts(answer, []string{"192.168.1.20"}) != answer {
+		t.Fatal("a single host must leave the answer untouched")
+	}
+}
+
+// Regression: several public hosts used to be rejected by pion ("invalid 1:1
+// NAT IP mapping"), breaking every viewer. Here the first host is unreachable,
+// so the viewer can only connect through an added one.
+func TestViewerConnectsThroughSecondPublicHost(t *testing.T) {
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+
+	r, _, ctx := newTestRelay(t, Options{UDPPort: port, PublicHosts: []string{"192.0.2.1", "127.0.0.1"}})
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	viewer, tracks := connectViewer(t, server.URL)
+	if !strings.Contains(viewer.RemoteDescription().SDP, fmt.Sprintf("127.0.0.1 %d typ host", port)) {
+		t.Fatalf("answer lacks the second host:\n%s", viewer.RemoteDescription().SDP)
+	}
+	go func() {
+		frame := Frame{Data: annexB([]byte{0x67, 0x42, 0xC0, 0x1F}, []byte{0x68, 0xCE, 0x3C, 0x80}, []byte{0x65, 0x88, 0x84}), Duration: 33 * time.Millisecond, Keyframe: true}
+		for ctx.Err() == nil {
+			r.WriteFrame(frame)
+			time.Sleep(33 * time.Millisecond)
+		}
+	}()
+	select {
+	case track := <-tracks:
+		if _, _, err := track.ReadRTP(); err != nil {
+			t.Fatalf("no media: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("viewer never connected (state %s)", viewer.ConnectionState())
 	}
 }
 

@@ -53,8 +53,11 @@ without re-encoding. Several browsers can watch one session. It ends about 30
 seconds after the last viewer leaves, so the battery camera can sleep again.
 
 Browser video uses UDP port 8766 (`KIWIBIT_LIVE_UDP_PORT`), published by
-compose. `KIWIBIT_LIVE_HOSTS` lists the addresses browsers dial; include the
-LAN address for phones. Live view is video only for now.
+compose on all interfaces (`KIWIBIT_LIVE_BIND`). `KIWIBIT_LIVE_HOSTS` lists the
+addresses browsers dial: put this PC's LAN address first, then `127.0.0.1`.
+Firefox won't use a `127.0.0.1` route, and phones need the LAN address. If a
+viewer can't connect, the hub log's `viewer offer candidates` line shows which
+connection routes its browser offered. Live view is video only for now.
 
 ## API overview
 

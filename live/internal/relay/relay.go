@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -79,7 +80,10 @@ func New(opts Options, resolution string, events io.Writer, cancel context.Cance
 		settings.SetICEUDPMux(pion.NewICEUDPMux(nil, conn))
 	}
 	if len(opts.PublicHosts) > 0 {
-		settings.SetNAT1To1IPs(opts.PublicHosts, pion.ICECandidateTypeHost)
+		// pion accepts one address here (or ext/int pairs, but the container's
+		// internal address isn't known). The others are added to each answer
+		// by withExtraHosts; the shared UDP port receives on every address.
+		settings.SetNAT1To1IPs(opts.PublicHosts[:1], pion.ICECandidateTypeHost)
 	}
 	track, err := pion.NewTrackLocalStaticSample(
 		pion.RTPCodecCapability{MimeType: pion.MimeTypeH264, ClockRate: 90000}, "video", "kiwibit-live")
@@ -231,6 +235,7 @@ func (r *Relay) addViewer(offer string) (string, error) {
 	}
 	r.mu.Unlock()
 
+	log.Printf("[relay] viewer offer candidates: %s", summarizeCandidates(offer))
 	pc, err := r.api.NewPeerConnection(pion.Configuration{})
 	if err != nil {
 		return "", fmt.Errorf("create peer connection: %w", err)
@@ -288,7 +293,86 @@ func (r *Relay) addViewer(offer string) (string, error) {
 	r.lastViewer = time.Now()
 	r.mu.Unlock()
 	r.Emit(map[string]any{"event": "viewers", "count": r.Status().Viewers})
-	return pc.LocalDescription().SDP, nil
+	return withExtraHosts(pc.LocalDescription().SDP, r.opts.PublicHosts), nil
+}
+
+// withExtraHosts copies each UDP host candidate advertised on hosts[0] to the
+// remaining hosts, at slightly lower priority, so a browser can use whichever
+// address it can reach (Firefox skips 127.0.0.1; phones need the LAN address).
+func withExtraHosts(sdp string, hosts []string) string {
+	if len(hosts) < 2 {
+		return sdp
+	}
+	lines := strings.SplitAfter(sdp, "\n")
+	out := make([]string, 0, len(lines)+len(hosts))
+	for _, line := range lines {
+		out = append(out, line)
+		body := strings.TrimRight(line, "\r\n")
+		if !strings.HasPrefix(body, "a=candidate:") {
+			continue
+		}
+		// candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type>
+		fields := strings.Fields(strings.TrimPrefix(body, "a=candidate:"))
+		if len(fields) < 8 || !strings.EqualFold(fields[2], "udp") || fields[4] != hosts[0] || fields[7] != "host" {
+			continue
+		}
+		priority, err := strconv.ParseUint(fields[3], 10, 32)
+		if err != nil {
+			continue
+		}
+		ending := line[len(body):]
+		for i, host := range hosts[1:] {
+			extra := append([]string(nil), fields...)
+			extra[0] = fields[0] + "x" + strconv.Itoa(i+1)
+			if priority > uint64(i+1) {
+				extra[3] = strconv.FormatUint(priority-uint64(i+1), 10)
+			}
+			extra[4] = host
+			out = append(out, "a=candidate:"+strings.Join(extra, " ")+ending)
+		}
+	}
+	return strings.Join(out, "")
+}
+
+// summarizeCandidates describes a browser's ICE candidates without addresses,
+// e.g. "udp/host/mdns×2 tcp/host/mdns×1": enough to see why a viewer can't connect.
+func summarizeCandidates(sdp string) string {
+	counts := map[string]int{}
+	var order []string
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		// candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> ...
+		fields := strings.Fields(strings.TrimPrefix(line, "a=candidate:"))
+		if len(fields) < 8 {
+			continue
+		}
+		address := fields[4]
+		kind := "ipv4"
+		switch {
+		case strings.HasSuffix(address, ".local"):
+			kind = "mdns"
+		case strings.Contains(address, ":"):
+			kind = "ipv6"
+		case strings.HasPrefix(address, "127."):
+			kind = "loopback"
+		}
+		key := strings.ToLower(fields[2]) + "/" + fields[7] + "/" + kind
+		if counts[key] == 0 {
+			order = append(order, key)
+		}
+		counts[key]++
+	}
+	if len(order) == 0 {
+		return "none (the browser offered no ICE candidates)"
+	}
+	parts := make([]string, len(order))
+	for i, key := range order {
+		parts[i] = fmt.Sprintf("%s×%d", key, counts[key])
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *Relay) removeViewer(pc *pion.PeerConnection) {
