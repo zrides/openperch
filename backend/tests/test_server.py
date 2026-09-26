@@ -144,6 +144,37 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.client.put('/api/settings/processing',
                                          json={'detector_batch': 5, 'classifier_batch': 16}).status_code, 422)
 
+    def test_recording_details_for_the_player(self):
+        import json as _json
+        manifest = self.root / 'downloads' / 'download_manifest.jsonl'
+        manifest.write_text(_json.dumps({'file': 'bird.avi', 'durationSeconds': 2.1}) + '\n')
+        self.process()
+        row = self.client.get('/api/recordings').json()[0]
+        self.assertEqual(row['duration'], 2.1)
+        self.assertEqual(row['species'], ['Northern cardinal'])
+        sightings = self.client.get(f'/api/recordings/{self.identity}/sightings').json()
+        self.assertEqual(len(sightings), 1)
+        sighting = sightings[0]
+        self.assertEqual(sighting['ai_species'], 'Northern cardinal')
+        self.assertIsNone(sighting['corrected'])
+        self.assertEqual(sighting['photos'], 3)
+        self.assertTrue(sighting['photo'].endswith('.jpg'))
+        self.assertIsInstance(sighting['evidence'], dict)
+        self.client.post(f"/api/sightings/{sighting['id']}/correction", json={'label': 'Summer tanager'})
+        self.assertEqual(self.client.get(f'/api/recordings/{self.identity}/sightings').json()[0]['corrected'],
+                         'Summer tanager')
+        self.assertEqual(self.client.get('/api/recordings/unknown/sightings').status_code, 404)
+
+    def test_download_and_labels(self):
+        download = self.client.get(f'/api/recordings/{self.identity}/video', params={'download': True})
+        self.assertIn('attachment', download.headers['content-disposition'])
+        self.assertIn('bird.avi', download.headers['content-disposition'])
+        inline = self.client.get(f'/api/recordings/{self.identity}/video')
+        self.assertNotIn('attachment', inline.headers.get('content-disposition', ''))
+        labels = self.client.get('/api/labels').json()
+        self.assertIn('Northern cardinal', labels)
+        self.assertGreater(len(labels), 100)
+
     def test_status_summary(self):
         self.process()
         status = self.client.get('/api/status').json()

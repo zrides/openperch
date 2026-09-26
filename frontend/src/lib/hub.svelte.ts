@@ -8,7 +8,14 @@ export const hub = $state({
   session: null as Session | null, // null until the first check completes
   live: { ...idleLive },
   job: { ...idleJob },
+  /** Bumped whenever the library changes (processing, corrections); pages refetch on it. */
+  changed: 0,
 });
+
+/** Tell open pages the library changed (e.g. after a correction made in this tab). */
+export function libraryChanged() {
+  hub.changed++;
+}
 
 let unsubscribe: (() => void) | null = null;
 
@@ -33,6 +40,9 @@ function startEvents() {
       case 'progress':
         hub.job.value = event.value;
         hub.job.total = event.total;
+        break;
+      case 'changed':
+        hub.changed++;
         break;
     }
   });

@@ -3,23 +3,32 @@
   import { checkSession, hub } from './lib/hub.svelte';
   import Live from './pages/Live.svelte';
   import Login from './pages/Login.svelte';
+  import Recordings from './pages/Recordings.svelte';
   import ComingSoon from './pages/ComingSoon.svelte';
 
   const pages: Record<string, { title: string; summary: string }> = {
     home: { title: 'Home', summary: "Today's visitors, top species and busiest hours from your library." },
-    recordings: { title: 'Recordings', summary: 'Every clip with its AI overlays, sightings and top matches, ready to play and correct.' },
     birds: { title: 'Birds', summary: 'Species gallery with the best photos of each sighting and one-click corrections.' },
     camera: { title: 'Camera', summary: 'Camera status, motion and recording settings, activity zone and notifications.' },
   };
+  const BUILT = ['live', 'recordings'];
 
-  function currentRoute() {
-    const route = location.hash.replace(/^#\/?/, '').split('/')[0];
-    return route === 'live' || route in pages ? route : 'live';
+  // #/<page>[/<id>][?t=<ms>]
+  function parse() {
+    const [path, search = ''] = location.hash.replace(/^#\/?/, '').split('?');
+    const [page, id = null] = path.split('/');
+    const known = BUILT.includes(page) || page in pages;
+    return {
+      route: known ? page : 'live',
+      id: known && id ? decodeURIComponent(id) : null,
+      startMs: Number(new URLSearchParams(search).get('t')) || 0,
+    };
   }
 
-  let route = $state(currentRoute());
+  let current = $state(parse());
+  const route = $derived(current.route);
   $effect(() => {
-    const update = () => { route = currentRoute(); };
+    const update = () => { current = parse(); };
     addEventListener('hashchange', update);
     return () => removeEventListener('hashchange', update);
   });
@@ -36,6 +45,8 @@
   <main>
     {#if route === 'live'}
       <Live />
+    {:else if route === 'recordings'}
+      <Recordings id={current.id} startMs={current.startMs} />
     {:else}
       {#key route}<ComingSoon {...pages[route]} />{/key}
     {/if}

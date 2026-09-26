@@ -30,7 +30,7 @@
   let video: HTMLVideoElement | undefined = $state();
   let frame: HTMLDivElement | undefined = $state();
 
-  let camera: Camera | null = $state(null);
+  let camera = $state<Camera | null>(null);
   let cameraError = $state('');
   let waking = $state(false);
   let recent: Recording[] = $state([]);

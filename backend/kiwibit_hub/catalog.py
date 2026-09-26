@@ -241,6 +241,15 @@ class Catalog:
             self.db.execute('UPDATE photos SET species=? WHERE sighting_id=?',
                             (label or sighting['ai_species'], sighting_id))
 
+    def sightings(self, video_id):
+        """Active sightings of one recording, with any correction and its best photo."""
+        return self.db.execute('''SELECT s.id, s.track, s.start_ms, s.end_ms, s.ai_species, s.evidence,
+                   c.label AS corrected,
+                   (SELECT p.path FROM photos p WHERE p.sighting_id=s.id ORDER BY p.quality DESC LIMIT 1) AS photo,
+                   (SELECT count(*) FROM photos p WHERE p.sighting_id=s.id) AS photos
+            FROM sightings s LEFT JOIN corrections c ON c.sighting_id=s.id
+            WHERE s.video_id=? AND s.active=1 ORDER BY s.start_ms''', (video_id,)).fetchall()
+
     def unmatched_corrections(self):
         return self.db.execute('''SELECT s.*,c.label,v.name FROM corrections c
             JOIN sightings s ON s.id=c.sighting_id JOIN videos v ON v.id=s.video_id

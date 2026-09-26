@@ -63,10 +63,63 @@ export interface Camera {
 export interface Recording {
   id: string;
   name: string;
-  status: string;
+  status: 'pending' | 'processing' | 'ready' | 'failed' | string;
+  error: string;
+  photos: number;
   recorded_at: string | null;
   species: string[];
+  duration: number | null;
 }
+
+export interface Evidence {
+  species: string;
+  suggestion: string;
+  samples: number;
+  support: number;
+  agreement: number;
+  similarity: number;
+  margin: number;
+  reason: string;
+}
+
+export interface Sighting {
+  id: string;
+  track: number;
+  start_ms: number;
+  end_ms: number;
+  ai_species: string;
+  corrected: string | null;
+  evidence: Evidence;
+  photo: string | null;
+  photos: number;
+}
+
+export interface Ranked {
+  label: string;
+  similarity: number;
+  score: number;
+}
+
+export interface Animal {
+  id: number;
+  box: [number, number, number, number];
+  category: string;
+  detection: number;
+  ranked: Ranked[];
+  tracking_state?: string;
+  display_label?: string;
+  sighting_id?: string;
+  identification_note?: string;
+}
+
+export interface Analysis {
+  width: number;
+  height: number;
+  fps: number;
+  frames: { ms: number; animals: Animal[] }[];
+}
+
+export const UNCERTAIN = 'Uncertain bird';
 
 export interface Session {
   authenticated: boolean;

@@ -6,6 +6,7 @@ Interactive API documentation is served at /docs.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import urllib.error
@@ -23,6 +24,8 @@ from . import config
 from .auth import SESSION_COOKIE, SESSION_SECONDS, Credentials, LoginLimiter
 from .camera import CameraService
 from .catalog import Catalog
+from .downloader import read_manifest
+from .engine import read_labels
 from .jobs import JobRunner
 from .kiwibit_api import KiwibitError
 from .live import LiveError, LiveManager
@@ -208,6 +211,21 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def camera_of(request: Request) -> CameraService:
         return request.app.state.camera
 
+    manifest_cache = {'mtime': None, 'durations': {}}
+
+    def durations():
+        """Clip lengths from the download manifest, reloaded when it changes."""
+        path = media_root / 'downloads' / 'download_manifest.jsonl'
+        try:
+            mtime = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return {}
+        if manifest_cache['mtime'] != mtime:
+            manifest_cache['durations'] = {'downloads/' + name: record.get('durationSeconds')
+                                           for name, record in read_manifest(path).items()}
+            manifest_cache['mtime'] = mtime
+        return manifest_cache['durations']
+
     def video_row(db, identity):
         row = db.db.execute('SELECT * FROM videos WHERE id=?', (identity,)).fetchone()
         if row is None:
@@ -233,17 +251,36 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def recordings(q: str = '', limit: int = 0, db: Catalog = Depends(catalog)):
         text = q.casefold()
         species = db.video_species()
+        lengths = durations()
         rows = [{**{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size')},
-                 'recorded_at': recorded_at(row['name']), 'species': species.get(row['id'], [])}
+                 'recorded_at': recorded_at(row['name']), 'species': species.get(row['id'], []),
+                 'duration': lengths.get(row['path'])}
                 for row in db.videos() if text in (row['name'] + ' ' + row['status']).casefold()]
+        # Newest recording first; imported files without a timestamp go last.
+        rows.sort(key=lambda row: row['recorded_at'] or '', reverse=True)
         return rows[:limit] if limit > 0 else rows
 
+    @app.get('/api/recordings/{identity}/sightings')
+    def recording_sightings(identity: str, db: Catalog = Depends(catalog)):
+        video_row(db, identity)
+        return [{**dict(row), 'evidence': json.loads(row['evidence'])} for row in db.sightings(identity)]
+
+    @app.get('/api/labels')
+    def labels():
+        """Candidate species names, for corrections."""
+        try:
+            return read_labels(config.SPECIES)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(500, 'The species list could not be read') from exc
+
     @app.get('/api/recordings/{identity}/video')
-    def video(identity: str, db: Catalog = Depends(catalog)):
-        path = db.video_path(video_row(db, identity))
+    def video(identity: str, download: bool = False, db: Catalog = Depends(catalog)):
+        row = video_row(db, identity)
+        path = db.video_path(row)
         if not path.is_file():
             raise HTTPException(404, 'Video file is missing')
-        return FileResponse(path, media_type='video/mp4')
+        return FileResponse(path, media_type='video/mp4', filename=row['name'] if download else None,
+                            content_disposition_type='attachment' if download else 'inline')
 
     @app.get('/api/recordings/{identity}/analysis')
     def analysis(identity: str, db: Catalog = Depends(catalog)):
