@@ -127,6 +127,20 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     hub = EventHub()
     limiter = limiter or LoginLimiter()
 
+    def add_clip(app, path):
+        """A clip recorded from live view joins the library and is identified when the hub is free."""
+        db = Catalog(library, media_root)
+        try:
+            identity = db.ingest(path)
+        finally:
+            db.close()
+        hub.publish('changed')
+        try:
+            app.state.runner.start('selected', [identity])
+        except RuntimeError:
+            pass  # busy: it stays pending for the next process or fetch
+        return identity
+
     def signed_in(headers, cookies):
         if credentials is None:
             return 'local'
@@ -142,8 +156,9 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         startup.recover()
         startup.close()
         app.state.runner = runner or JobRunner(library, media_root=media_root)
-        app.state.live = live or LiveManager()
+        app.state.live = live or LiveManager(recordings=media_root / 'downloads' / 'live')
         app.state.live.listener = lambda status: hub.publish('live', **status)
+        app.state.live.on_recorded = lambda path: add_clip(app, path)
         app.state.camera = camera or CameraService()
         hub.loop = asyncio.get_running_loop()
         unsubscribe = app.state.runner.subscribe(hub.publish)
@@ -460,6 +475,17 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             return {'sdp': live.offer(body.sdp)}
         except LiveError as exc:
             raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/live/record')
+    def live_record(live: LiveManager = Depends(live_of)):
+        try:
+            return live.start_recording()
+        except LiveError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/live/record/stop')
+    def live_record_stop(live: LiveManager = Depends(live_of)):
+        return live.stop_recording()
 
     @app.post('/api/live/stop')
     def live_stop(live: LiveManager = Depends(live_of)):

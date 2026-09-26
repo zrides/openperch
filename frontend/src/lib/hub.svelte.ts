@@ -1,7 +1,10 @@
 // App-wide reactive state: the session, and the hub's event stream once signed in.
 import { api, setUnauthorizedHandler, subscribe, type JobState, type LiveStatus, type Session } from './api';
 
-const idleLive: LiveStatus = { state: 'idle', detail: '', resolution: null, viewers: 0, running: false };
+const idleLive: LiveStatus = {
+  state: 'idle', detail: '', resolution: null, viewers: 0, running: false,
+  recording: { active: false, started: null, last: null },
+};
 const idleJob: JobState = { action: null, running: false, message: '', value: 0, total: 0 };
 
 export const hub = $state({

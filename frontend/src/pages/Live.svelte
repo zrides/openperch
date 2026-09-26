@@ -4,6 +4,7 @@
   import { api, ApiError, type Camera, type Recording } from '../lib/api';
   import { hub } from '../lib/hub.svelte';
   import { connectLive, type LiveConnection } from '../lib/liveConnection';
+  import { clock } from '../lib/format';
 
   const RESOLUTIONS = [
     { value: '1280x720', label: '720p' },
@@ -115,6 +116,50 @@
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 
+  // Recording: the hub saves the clip into the library and identifies its birds.
+  const recording = $derived(!!hub.live.recording?.active);
+  let recordBusy = $state(false);
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!recording) return;
+    const timer = setInterval(() => { now = Date.now(); }, 500);
+    return () => clearInterval(timer);
+  });
+  const recordElapsed = $derived(recording && hub.live.recording?.started ? now - hub.live.recording.started * 1000 : 0);
+
+  async function startRecording() {
+    recordBusy = true;
+    notice = '';
+    try {
+      await api.post('/api/live/record');
+    } catch (e) {
+      notice = message(e);
+    } finally {
+      recordBusy = false;
+    }
+  }
+
+  async function stopRecording() {
+    recordBusy = true;
+    try {
+      await api.post('/api/live/record/stop');
+    } catch (e) {
+      notice = message(e);
+    } finally {
+      recordBusy = false;
+    }
+  }
+
+  // Report each finished clip once.
+  let lastClip = $state<NonNullable<NonNullable<typeof hub.live.recording>['last']> | null>(null);
+  let reportedClip = hub.live.recording?.last?.finished ?? 0;
+  $effect(() => {
+    const last = hub.live.recording?.last;
+    if (!last || last.finished === reportedClip) return;
+    reportedClip = last.finished;
+    lastClip = last;
+  });
+
   function snapshot() {
     if (!video?.videoWidth) return;
     const canvas = document.createElement('canvas');
@@ -213,9 +258,15 @@
       <button type="button" class="btn" onclick={snapshot} disabled={!live}>
         <Icon name="snapshot" size={18} />Snapshot
       </button>
-      <button type="button" class="btn" disabled title="Coming next: save clips straight into the library">
-        <span class="rec"></span>Record clip
-      </button>
+      {#if recording}
+        <button type="button" class="btn recording" onclick={stopRecording} disabled={recordBusy}>
+          <span class="rec-stop"></span>{recordBusy ? 'Saving…' : `Stop · ${clock(recordElapsed)}`}
+        </button>
+      {:else}
+        <button type="button" class="btn" onclick={startRecording} disabled={!live || recordBusy}>
+          <span class="rec"></span>Record clip
+        </button>
+      {/if}
       <button type="button" class="btn" onclick={fullscreen} disabled={!live} aria-label="Full screen">
         <Icon name="fullscreen" size={18} />
       </button>
@@ -223,8 +274,20 @@
         Live bird boxes <input type="checkbox" class="switch" role="switch" disabled>
       </label>
     </div>
+    {#if lastClip}
+      <p class="saved" aria-live="polite">
+        {#if lastClip.error}
+          {lastClip.error}
+        {:else if lastClip.recording_id}
+          Clip saved to the library. Its birds are identified when the hub is free.
+          <a href="#/recordings/{lastClip.recording_id}">Open the clip</a>
+        {:else}
+          Clip saved as {lastClip.file}.
+        {/if}
+      </p>
+    {/if}
     {#if notice}<p class="muted small" aria-live="polite">{notice}</p>{/if}
-    <p class="muted small">Live view is video only. The session closes itself about 30 seconds after everyone stops watching, so the camera can sleep.</p>
+    <p class="muted small">Live view is video only. Recorded clips (up to 10 minutes) go into the library. The session closes itself about 30 seconds after everyone stops watching, so the camera can sleep.</p>
   </section>
 
   <aside class="side">
@@ -311,6 +374,9 @@
   .error { margin: 0; padding: 10px 14px; border-radius: 12px; background: #F7E1DA; color: #7A2A18; font-size: 14px; }
   .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .rec { width: 12px; height: 12px; border-radius: 50%; background: var(--ember); }
+  .rec-stop { width: 12px; height: 12px; border-radius: 2px; background: #FFFFFF; }
+  .btn.recording { background: var(--ember); border-color: var(--ember); color: #FFFFFF; font-variant-numeric: tabular-nums; }
+  .saved { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--spruce-soft); color: var(--spruce); font-size: 14px; }
   .boxes { margin-left: auto; display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--muted); }
 
   .side { display: flex; flex-direction: column; gap: 20px; }

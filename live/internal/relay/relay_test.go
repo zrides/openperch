@@ -287,3 +287,56 @@ func TestStopEndpoint(t *testing.T) {
 		t.Fatal("stop did not cancel the session")
 	}
 }
+
+func TestStreamStartsAtKeyframeAndKeepsSessionAlive(t *testing.T) {
+	r, _, ctx := newTestRelay(t, Options{IdleTimeout: 1200 * time.Millisecond, StartTimeout: time.Hour})
+	var keyframeRequests atomic.Int32
+	r.SetKeyframeRequester(func() { keyframeRequests.Add(1) })
+	go r.Watch(ctx)
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/stream.h264")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "video/h264" {
+		t.Fatalf("content type %q", resp.Header.Get("Content-Type"))
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.Status().Recorders != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if keyframeRequests.Load() == 0 {
+		t.Fatal("a new recording should request a keyframe")
+	}
+	delta := Frame{Data: annexB([]byte{0x41, 0x01}), Keyframe: false}
+	key := Frame{Data: annexB([]byte{0x67, 0x42}, []byte{0x68, 0xCE}, []byte{0x65, 0x88}), Keyframe: true}
+	after := Frame{Data: annexB([]byte{0x41, 0x02}), Keyframe: false}
+	// Write frames for longer than the idle timeout: the recording keeps the session alive.
+	go func() {
+		r.WriteFrame(delta)
+		r.WriteFrame(key)
+		for i := 0; i < 20 && ctx.Err() == nil; i++ {
+			r.WriteFrame(after)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	want := append(append([]byte{}, key.Data...), after.Data...)
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(resp.Body, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("stream must begin at the keyframe:\n got %x\nwant %x", got, want)
+	}
+	time.Sleep(1800 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatalf("session ended while recording: %v", context.Cause(ctx))
+	}
+	r.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("stream should end cleanly when the session closes: %v", err)
+	}
+}

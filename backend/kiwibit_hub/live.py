@@ -16,12 +16,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from . import config
 
 log = logging.getLogger('kiwibit_hub.live')
 
 RESOLUTIONS = ('1280x720', '1920x1080', '3840x2160')
+MAX_RECORDING_SECONDS = 600
 
 
 class LiveError(Exception):
@@ -40,15 +42,20 @@ def find_relay():
 
 
 class LiveManager:
-    def __init__(self, relay=None, ready_timeout=15, listener=None):
+    def __init__(self, relay=None, ready_timeout=15, listener=None, on_recorded=None, recordings=None):
         self.relay = relay
         self.ready_timeout = ready_timeout
         self.listener = listener or (lambda status: None)
+        # Called with each finished clip's path; returns its library id (or None).
+        self.on_recorded = on_recorded or (lambda path: None)
+        self.recordings = Path(recordings) if recordings is not None else config.DOWNLOADS / 'live'
         self.lock = threading.RLock()
         self.process = None
         self.port = None
         self.ready = threading.Event()
-        self.status_data = {'state': 'idle', 'detail': '', 'resolution': None, 'viewers': 0, 'started': None}
+        self.recorder = None
+        self.status_data = {'state': 'idle', 'detail': '', 'resolution': None, 'viewers': 0, 'started': None,
+                            'recording': {'active': False, 'started': None, 'last': None}}
 
     # ---- status -----------------------------------------------------------
 
@@ -83,7 +90,9 @@ class LiveManager:
             self.ready = threading.Event()
             self.port = None
             self.status_data = {'state': 'starting', 'detail': '', 'resolution': resolution,
-                                'viewers': 0, 'started': time.time()}
+                                'viewers': 0, 'started': time.time(),
+                                'recording': {'active': False, 'started': None,
+                                              'last': self.status_data['recording']['last']}}
             log.info('Starting live relay at %s', resolution)
             command = list(relay) if isinstance(relay, (list, tuple)) else [relay]
             process = subprocess.Popen(
@@ -165,9 +174,93 @@ class LiveManager:
             raise LiveError('The live relay is not responding') from exc
 
     def stop(self):
+        self.stop_recording()  # finish the clip before its source goes away
         with self.lock:
             self._stop_locked()
         return self.status()
+
+    # ---- recording ----------------------------------------------------------
+
+    def start_recording(self, max_seconds=MAX_RECORDING_SECONDS):
+        ffmpeg = shutil.which('ffmpeg')
+        if not ffmpeg:
+            raise LiveError('FFmpeg is needed to record clips')
+        with self.lock:
+            if not self._running() or self.port is None:
+                raise LiveError('Start live view first')
+            if self.recorder is not None:
+                raise LiveError('Already recording')
+            started = time.time()
+            name = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(started)) + '_live'
+            self.recordings.mkdir(parents=True, exist_ok=True)
+            final = self.recordings / f'{name}.mp4'
+            partial = self.recordings / f'{name}.part.mp4'
+            stop = threading.Event()
+            thread = threading.Thread(target=self._record, name='live-record',
+                                      args=(self.port, ffmpeg, partial, final, stop, started + max_seconds))
+            self.recorder = {'thread': thread, 'stop': stop}
+            recording = {'active': True, 'started': started, 'last': self.status_data['recording']['last']}
+        self._update(recording=recording)
+        thread.start()
+        log.info('Recording started')
+        return self.status()
+
+    def stop_recording(self, timeout=40):
+        with self.lock:
+            recorder = self.recorder
+        if recorder is None:
+            return self.status()
+        recorder['stop'].set()
+        recorder['thread'].join(timeout)
+        return self.status()
+
+    def _record(self, port, ffmpeg, partial, final, stop, deadline):
+        error = ''
+        # Raw H264 has no timestamps: stamp frames as they arrive (they arrive live).
+        encoder = subprocess.Popen(
+            [ffmpeg, '-hide_banner', '-loglevel', 'error', '-use_wallclock_as_timestamps', '1',
+             '-f', 'h264', '-i', 'pipe:0', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', '-y', str(partial)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/stream.h264', timeout=5) as stream:
+                while not stop.is_set() and time.time() < deadline:
+                    chunk = stream.read1(65536)
+                    if not chunk:
+                        break  # the live session ended
+                    encoder.stdin.write(chunk)
+        except (OSError, ValueError) as exc:
+            if not stop.is_set():
+                error = 'The live stream ended while recording'
+                log.info('Recording stream ended: %s', exc)
+        finally:
+            try:
+                encoder.stdin.close()
+            except OSError:
+                pass
+        try:
+            _, stderr = encoder.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            encoder.kill()
+            _, stderr = encoder.communicate()
+        recording_id = None
+        if encoder.returncode == 0 and partial.is_file() and partial.stat().st_size > 0:
+            partial.replace(final)
+            error = ''
+            try:
+                recording_id = self.on_recorded(final)
+            except Exception:
+                log.exception('Could not add the recorded clip to the library')
+        else:
+            partial.unlink(missing_ok=True)
+            detail = (stderr or b'').decode('utf-8', 'replace').strip().splitlines()
+            error = error or ('No video was received' if not detail else f'Recording failed: {detail[-1][:160]}')
+        last = {'file': final.name if final.exists() else None,
+                'recording_id': recording_id, 'error': error, 'finished': time.time()}
+        log.info('Recording finished: %s', error or final.name)
+        with self.lock:
+            self.recorder = None
+        self._update(recording={'active': False, 'started': None, 'last': last})
 
     def _stop_locked(self):
         process, port = self.process, self.port

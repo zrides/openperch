@@ -6,7 +6,8 @@ import json
 import os
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def emit(**event):
@@ -26,6 +27,25 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def do_GET(self):
+        # FAKE_RELAY_STREAM: an Annex-B H264 file, sent in small timed chunks like live video.
+        if self.path != '/stream.h264' or not os.environ.get('FAKE_RELAY_STREAM'):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'video/h264')
+        self.end_headers()
+        data = open(os.environ['FAKE_RELAY_STREAM'], 'rb').read()
+        try:
+            for start in range(0, len(data), 2048):
+                if stop.is_set():
+                    break
+                self.wfile.write(data[start:start + 2048])
+                self.wfile.flush()
+                time.sleep(0.02)
+        except OSError:
+            pass
+
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
         if self.path == '/whep':
@@ -42,7 +62,7 @@ class Handler(BaseHTTPRequestHandler):
             stop.set()
 
 
-server = HTTPServer(('127.0.0.1', 0), Handler)
+server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 emit(event='listening', port=server.server_port)
 emit(event='state', state='waking', detail='')

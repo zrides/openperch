@@ -11,15 +11,15 @@ import (
 
 // mockSignaler records calls for verification.
 type mockSignaler struct {
-	joinLiveCalled    bool
-	sdpOfferSent      string
-	iceCandidateSent  bool
-	closeCalled       bool
+	joinLiveCalled   bool
+	sdpOfferSent     string
+	iceCandidateSent bool
+	closeCalled      bool
 }
 
-func (m *mockSignaler) Connect() error                                                  { return nil }
-func (m *mockSignaler) SendJoinLive()                                                   { m.joinLiveCalled = true }
-func (m *mockSignaler) SendSDPOffer(sdp string)                                         { m.sdpOfferSent = sdp }
+func (m *mockSignaler) Connect() error          { return nil }
+func (m *mockSignaler) SendJoinLive()           { m.joinLiveCalled = true }
+func (m *mockSignaler) SendSDPOffer(sdp string) { m.sdpOfferSent = sdp }
 func (m *mockSignaler) SendICECandidate(sdpMid string, sdpMLineIndex int, candidate string) {
 	m.iceCandidateSent = true
 }
@@ -27,15 +27,15 @@ func (m *mockSignaler) Close() { m.closeCalled = true }
 
 // mockPeer records calls for verification.
 type mockPeer struct {
-	offerSDP         string
-	remoteDescSet    bool
+	offerSDP          string
+	remoteDescSet     bool
 	iceCandidateAdded bool
 }
 
-func (m *mockPeer) AddTransceivers() error               { return nil }
-func (m *mockPeer) SetOnTrack(videoOut io.Writer)         {}
+func (m *mockPeer) AddTransceivers() error                           { return nil }
+func (m *mockPeer) SetOnTrack(videoOut io.Writer)                    {}
 func (m *mockPeer) SetOnICECandidate(send func(string, int, string)) {}
-func (m *mockPeer) CreateOffer() (string, error)          { return m.offerSDP, nil }
+func (m *mockPeer) CreateOffer() (string, error)                     { return m.offerSDP, nil }
 func (m *mockPeer) SetRemoteDescription(sdp domain.SDPPayload) error {
 	m.remoteDescSet = true
 	return nil

@@ -1,5 +1,7 @@
 import base64
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -86,6 +88,73 @@ class LiveManagerTests(unittest.TestCase):
         with patch('kiwibit_hub.live.find_relay', return_value=None):
             with self.assertRaisesRegex(LiveError, 'not installed'):
                 LiveManager().start('t', 's', '1280x720')
+
+
+FFMPEG = shutil.which('ffmpeg')
+
+
+def make_h264(folder):
+    """A 3-second Annex-B H264 test stream, or None when ffmpeg/libx264 are unavailable."""
+    if not FFMPEG:
+        return None
+    target = Path(folder) / 'test.h264'
+    result = subprocess.run([FFMPEG, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=10', '-t', '3',
+                             '-c:v', 'libx264', '-g', '5', '-f', 'h264', str(target)], capture_output=True)
+    return target if result.returncode == 0 and target.stat().st_size else None
+
+
+class RecordingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.stream = make_h264(self.temp.name)
+        if not self.stream:
+            self.skipTest('ffmpeg with libx264 is not available')
+        self.recorded = []
+        self.live = LiveManager(FAKE, on_recorded=lambda path: self.recorded.append(path) or 'rec-1',
+                                recordings=Path(self.temp.name) / 'live')
+        env = patch.dict(os.environ, {'FAKE_RELAY_STREAM': str(self.stream)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def tearDown(self):
+        self.live.shutdown()
+        self.temp.cleanup()
+
+    def probe(self, path):
+        result = subprocess.run([shutil.which('ffprobe'), '-v', 'error', '-show_entries', 'format=duration',
+                                 '-of', 'csv=p=0', str(path)], capture_output=True, text=True)
+        return float(result.stdout.strip() or 0)
+
+    def test_record_and_stop_produces_a_library_clip(self):
+        self.live.start('t', 's', '1280x720')
+        status = self.live.start_recording()
+        self.assertTrue(status['recording']['active'])
+        with self.assertRaisesRegex(LiveError, 'Already recording'):
+            self.live.start_recording()
+        time.sleep(1.5)
+        status = self.live.stop_recording()
+        last = status['recording']['last']
+        self.assertFalse(status['recording']['active'])
+        self.assertEqual(last['error'], '')
+        self.assertEqual(last['recording_id'], 'rec-1')
+        clip = Path(self.temp.name) / 'live' / last['file']
+        self.assertEqual(self.recorded, [clip])
+        self.assertRegex(clip.name, r'^\d{8}T\d{6}Z_live\.mp4$', 'named like downloads so it sorts by time')
+        self.assertGreater(self.probe(clip), 0.5)
+        self.assertEqual(list(clip.parent.glob('*.part.mp4')), [])
+
+    def test_ending_live_view_finishes_the_clip(self):
+        self.live.start('t', 's', '1280x720')
+        self.live.start_recording()
+        time.sleep(1)
+        self.live.stop()
+        last = self.live.status()['recording']['last']
+        self.assertTrue(last['file'])
+        self.assertEqual(len(self.recorded), 1)
+
+    def test_recording_requires_a_live_session(self):
+        with self.assertRaisesRegex(LiveError, 'Start live view first'):
+            self.live.start_recording()
 
 
 class FakeClient:

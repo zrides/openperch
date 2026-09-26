@@ -46,6 +46,11 @@ export interface LiveStatus {
   resolution: string | null;
   viewers: number;
   running: boolean;
+  recording?: {
+    active: boolean;
+    started: number | null;
+    last: { file: string | null; recording_id: string | null; error: string; finished: number } | null;
+  };
 }
 
 export interface Camera {

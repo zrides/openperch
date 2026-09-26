@@ -40,6 +40,7 @@ type Status struct {
 	Detail     string `json:"detail,omitempty"`
 	Resolution string `json:"resolution"`
 	Viewers    int    `json:"viewers"`
+	Recorders  int    `json:"recorders"`
 	Frames     uint64 `json:"frames"`
 	Uptime     int64  `json:"uptime_seconds"`
 }
@@ -54,15 +55,18 @@ type Relay struct {
 	cancel     context.CancelCauseFunc
 	keyframe   func()
 
-	mu         sync.Mutex
-	state      string
-	detail     string
-	viewers    map[*pion.PeerConnection]struct{}
-	frames     uint64
-	started    time.Time
-	lastViewer time.Time
-	lastPLI    time.Time
-	eventsMu   sync.Mutex
+	mu          sync.Mutex
+	state       string
+	detail      string
+	viewers     map[*pion.PeerConnection]struct{}
+	subscribers map[*subscriber]struct{}
+	done        chan struct{}
+	closeOnce   sync.Once
+	frames      uint64
+	started     time.Time
+	lastViewer  time.Time
+	lastPLI     time.Time
+	eventsMu    sync.Mutex
 }
 
 func New(opts Options, resolution string, events io.Writer, cancel context.CancelCauseFunc) (*Relay, error) {
@@ -92,17 +96,19 @@ func New(opts Options, resolution string, events io.Writer, cancel context.Cance
 	}
 	now := time.Now()
 	return &Relay{
-		api:        pion.NewAPI(pion.WithMediaEngine(engine), pion.WithSettingEngine(settings)),
-		track:      track,
-		opts:       opts,
-		resolution: resolution,
-		events:     events,
-		cancel:     cancel,
-		keyframe:   func() {},
-		viewers:    map[*pion.PeerConnection]struct{}{},
-		started:    now,
-		lastViewer: now,
-		state:      "starting",
+		api:         pion.NewAPI(pion.WithMediaEngine(engine), pion.WithSettingEngine(settings)),
+		track:       track,
+		opts:        opts,
+		resolution:  resolution,
+		events:      events,
+		cancel:      cancel,
+		keyframe:    func() {},
+		viewers:     map[*pion.PeerConnection]struct{}{},
+		subscribers: map[*subscriber]struct{}{},
+		done:        make(chan struct{}),
+		started:     now,
+		lastViewer:  now,
+		state:       "starting",
 	}, nil
 }
 
@@ -136,6 +142,7 @@ func (r *Relay) WriteFrame(frame Frame) {
 		log.Printf("[relay] write sample: %v", err)
 		return
 	}
+	r.publish(frame)
 	r.mu.Lock()
 	r.frames++
 	first := r.frames == 1
@@ -149,7 +156,7 @@ func (r *Relay) Status() Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return Status{State: r.state, Detail: r.detail, Resolution: r.resolution, Viewers: len(r.viewers),
-		Frames: r.frames, Uptime: int64(time.Since(r.started).Seconds())}
+		Recorders: len(r.subscribers), Frames: r.frames, Uptime: int64(time.Since(r.started).Seconds())}
 }
 
 func (r *Relay) requestKeyframe() {
@@ -173,7 +180,8 @@ func (r *Relay) Watch(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.mu.Lock()
-			idle := len(r.viewers) == 0 && time.Since(r.lastViewer) > r.opts.IdleTimeout
+			// An active recording keeps the session alive like a viewer.
+			idle := len(r.viewers) == 0 && len(r.subscribers) == 0 && time.Since(r.lastViewer) > r.opts.IdleTimeout
 			stalled := r.frames == 0 && time.Since(r.started) > r.opts.StartTimeout
 			r.mu.Unlock()
 			if idle {
@@ -208,6 +216,7 @@ func (r *Relay) Handler() http.Handler {
 		w.WriteHeader(http.StatusCreated)
 		io.WriteString(w, answer)
 	})
+	mux.HandleFunc("/stream.h264", r.serveStream)
 	mux.HandleFunc("/status", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(r.Status())
@@ -388,8 +397,9 @@ func (r *Relay) removeViewer(pc *pion.PeerConnection) {
 	}
 }
 
-// Close disconnects every viewer.
+// Close disconnects every viewer and ends any stream.
 func (r *Relay) Close() {
+	r.closeOnce.Do(func() { close(r.done) })
 	r.mu.Lock()
 	viewers := make([]*pion.PeerConnection, 0, len(r.viewers))
 	for pc := range r.viewers {
