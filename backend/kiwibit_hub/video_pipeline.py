@@ -86,7 +86,15 @@ class VideoFrames:
                 return kind, value
             except queue.Empty:
                 if self.thread is not None and not self.thread.is_alive():
-                    raise RuntimeError('Video decoder stopped without an end marker')
+                    # The producer may have queued its final item between the
+                    # timeout and this check; only a truly empty queue is an error.
+                    try:
+                        kind, value = self.queue.get_nowait()
+                    except queue.Empty:
+                        raise RuntimeError('Video decoder stopped without an end marker') from None
+                    if kind == 'error':
+                        raise value
+                    return kind, value
 
     def __enter__(self):
         check_cancel(self.cancel)

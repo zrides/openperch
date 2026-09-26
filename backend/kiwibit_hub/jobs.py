@@ -15,6 +15,7 @@ from pathlib import Path
 from . import config
 from .cancel import Cancelled, check_cancel
 from .catalog import Catalog, discover
+from .diagnostics import redact
 from .engine import Engine, read_labels, SUPPORTED_BATCH_SIZES, DEFAULT_DETECTOR_BATCH, DEFAULT_CLASSIFICATION_BATCH
 from .sightings import SMART_VERSION
 
@@ -34,6 +35,11 @@ class LibraryJob:
         self.downloads = Path(downloads) if downloads is not None else config.DOWNLOADS
         self.media_root = media_root
         self.cancel = threading.Event()
+        self.last_failure = None
+
+    def record_failure(self, context, exc):
+        log.warning('%s: %s: %s', context, type(exc).__name__, exc, exc_info=not isinstance(exc, (OSError, ValueError, RuntimeError)))
+        self.last_failure = redact(f'{type(exc).__name__}: {exc}')[:300]
 
     def message(self, text):
         self.listener('message', text=text)
@@ -86,8 +92,9 @@ class LibraryJob:
                         db.ingest(path, copy=self.action == 'import', cancel=self.cancel)
                     except Cancelled:
                         raise
-                    except Exception:
+                    except Exception as exc:
                         failures += 1
+                        self.record_failure(f'Could not catalog {Path(path).name}', exc)
                     self.progress(index+1, len(paths))
                 self.changed()
             if self.action != 'scan':
@@ -95,7 +102,11 @@ class LibraryJob:
                                                        else row['status'] != 'ready')]
                 labels = read_labels(self.labels)
                 failures += self.process_rows(db, rows, labels)
-            self.message(f"Finished · {failures} failure(s)." if failures else "Finished · library saved.")
+            if failures:
+                last = f' Last: {self.last_failure}' if self.last_failure else ''
+                self.message(f'Finished · {failures} failure(s).{last} See the log for each one.')
+            else:
+                self.message("Finished · library saved.")
         except Cancelled:
             self.message("Stopped. Completed videos and photos are saved; pending work can resume.")
         except Exception as exc:
@@ -202,8 +213,11 @@ class LibraryJob:
             try:
                 action, target = download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, 120)
                 db.ingest(target)
-            except Exception:
+            except Cancelled:
+                raise
+            except Exception as exc:
                 failures += 1
+                self.record_failure(f"Could not fetch recording startTime={event.get('startTime')}", exc)
             if action == 'saved' or (index+1) % 20 == 0 or index+1 == len(events):
                 self.progress(index+1, len(events))
                 self.changed()

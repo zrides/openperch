@@ -74,6 +74,42 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(self.db.result(identity))
         self.assertEqual(self.db.species(), [])
 
+    def result_folders(self):
+        return sorted(p.name for p in (self.db.root / 'results').iterdir())
+
+    def test_reprocessing_removes_superseded_result_folder(self):
+        identity = self.db.ingest(self.video)
+        for _ in range(3):
+            self.db.save_analysis(identity, self.result, threading.Event())
+        folders = self.result_folders()
+        self.assertEqual(len(folders), 1)
+        self.assertEqual(Path(self.db.videos()[0]['result']).parent.name, folders[0])
+
+    def test_changed_source_removes_its_stale_results(self):
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.result, threading.Event())
+        with self.video.open('ab') as sink:
+            sink.write(b'changed')
+        self.db.ingest(self.video)
+        self.assertEqual(self.result_folders(), [])
+
+    def test_failure_before_extraction_leaves_no_folder(self):
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.result, threading.Event())
+        kept = self.result_folders()
+        broken = {'complete': True, 'frames': [{'ms': 0}]}  # missing 'animals'
+        with self.assertRaises(KeyError):
+            self.db.save_analysis(identity, broken, threading.Event())
+        self.assertEqual(self.result_folders(), kept)
+
+    def test_video_paths_are_relative_to_media_root(self):
+        self.db.close()
+        self.db = Catalog(self.root / 'library', media_root=self.root)
+        self.db.ingest(self.video)
+        row = self.db.videos()[0]
+        self.assertEqual(row['path'], 'bird.avi')
+        self.assertEqual(self.db.video_path(row), self.video.resolve())
+
     def test_partial_and_empty_files_are_excluded(self):
         (self.root / 'clip.part.mp4').write_bytes(b'partial')
         (self.root / 'empty.mp4').touch()

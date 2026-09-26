@@ -109,5 +109,69 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(report['files'][0]['status'], 'verified')
 
 
+class RemuxTests(unittest.TestCase):
+    """The camera sometimes advertises an AAC track with sample rate 0."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.event = {'serialNumber': 'test-camera', 'startTime': 1, 'videoUrl': 'https://cloud.example/v.m3u8'}
+        self.manifest_path = self.root / 'download_manifest.jsonl'
+        self.manifest = {}
+        self.commands = []
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def fake_ffmpeg(self, outcomes):
+        """Each call writes the output file (or not) and returns the next scripted result."""
+        outcomes = iter(outcomes)
+        def run(command, **_):
+            self.commands.append(command)
+            code, stderr, output = next(outcomes)
+            if output is not None:
+                Path(command[-1]).write_bytes(output)
+            return Mock(returncode=code, stderr=stderr)
+        return run
+
+    def download(self, outcomes):
+        with patch.object(cloud.subprocess, 'run', side_effect=self.fake_ffmpeg(outcomes)), \
+             patch.object(cloud, 'MediaProxy') as proxy, \
+             patch.object(cloud, 'probe_video', return_value=2.1):
+            proxy.return_value.url_for.return_value = 'http://127.0.0.1/media/x'
+            return cloud.download_one('ffmpeg', 'ffprobe', self.root, self.manifest_path,
+                                      self.manifest, self.event, 30)
+
+    def partials(self):
+        return sorted(p.name for p in self.root.rglob('*.part.mp4'))
+
+    def test_empty_audio_track_retries_video_only(self):
+        empty_audio = b'[mp4 @ 0x1] sample rate not set\nCould not write header (incorrect codec parameters ?)'
+        action, target = self.download([(1, empty_audio, b''), (0, b'', b'video bytes')])
+        self.assertEqual(action, 'saved')
+        self.assertEqual(target.read_bytes(), b'video bytes')
+        self.assertIn('0:a:0?', self.commands[0])
+        self.assertIn('-an', self.commands[1])
+        self.assertNotIn('0:a:0?', self.commands[1])
+        self.assertTrue(self.manifest[target.relative_to(self.root).as_posix()]['audioDropped'])
+        self.assertEqual(self.partials(), [], 'the empty first attempt must not be left behind')
+
+    def test_normal_download_keeps_audio_and_does_not_flag(self):
+        action, target = self.download([(0, b'', b'video+audio')])
+        self.assertEqual(len(self.commands), 1)
+        self.assertNotIn('audioDropped', self.manifest[target.relative_to(self.root).as_posix()])
+
+    def test_unrelated_failure_is_not_retried_and_empty_partial_removed(self):
+        with self.assertRaisesRegex(RuntimeError, 'empty partial removed'):
+            self.download([(1, b'Server returned 403 Forbidden', b'')])
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.partials(), [])
+
+    def test_failed_partial_with_bytes_is_kept_for_inspection(self):
+        with self.assertRaisesRegex(RuntimeError, 'partial kept at'):
+            self.download([(1, b'Connection reset', b'half a video')])
+        self.assertEqual(len(self.partials()), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

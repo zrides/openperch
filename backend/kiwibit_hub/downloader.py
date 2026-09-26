@@ -141,6 +141,36 @@ def verify_existing(ffprobe, output, manifest_path, manifest, target, event=None
     return 'skipped', target
 
 
+EMPTY_AUDIO = re.compile(r"sample rate not set|channel layout not set", re.IGNORECASE)
+
+
+def remux(ffmpeg, url, target, timeout, audio=True):
+    """Copy the stream into a fresh unique .part.mp4; returns (partial, completed process)."""
+    partial = target.with_name(target.stem + "." + uuid.uuid4().hex[:8] + ".part.mp4")
+    streams = ["-map", "0:v:0", "-map", "0:a:0?"] if audio else ["-map", "0:v:0", "-an"]
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i", url,
+             *streams, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(partial)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=timeout, creationflags=BACKGROUND_PROCESS_FLAGS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"download timed out; {discard_if_empty(partial)}") from exc
+    return partial, result
+
+
+def discard_if_empty(partial):
+    """Empty partials carry no diagnostic value; keep anything with bytes for inspection."""
+    try:
+        if partial.stat().st_size == 0:
+            partial.unlink()
+            return "empty partial removed"
+    except FileNotFoundError:
+        return "no partial written"
+    return f"partial kept at {partial.name}"
+
+
 def download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, timeout, verify=False):
     target = recording_path(output, event)
     relative = str(target.relative_to(output)).replace("\\", "/")
@@ -148,26 +178,23 @@ def download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, timeou
         return verify_existing(ffprobe, output, manifest_path, manifest, target, event, full=verify)
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.stem + "." + uuid.uuid4().hex[:8] + ".part.mp4")
+    audio = True
     proxy = MediaProxy()
     try:
         local_url = proxy.url_for(event["videoUrl"])
-        try:
-            result = subprocess.run(
-                [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-n", "-i", local_url,
-                 "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart",
-                 "-f", "mp4", str(partial)],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                timeout=timeout, creationflags=BACKGROUND_PROCESS_FLAGS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"download timed out; partial kept at {partial.name}") from exc
+        partial, result = remux(ffmpeg, local_url, target, timeout, audio=True)
+        if result.returncode and EMPTY_AUDIO.search(result.stderr.decode("utf-8", errors="replace")):
+            # Some cameras advertise an AAC track with no samples (sample rate 0).
+            # The MP4 muxer rejects it; the video itself is intact, so keep it without audio.
+            discard_if_empty(partial)
+            audio = False
+            partial, result = remux(ffmpeg, local_url, target, timeout, audio=False)
     finally:
         proxy.close()
     if result.returncode:
         details = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
         detail = re.sub(r"https?://\S+", "[media URL]", details[-1])[:180] if details else "no details"
-        raise RuntimeError(f"ffmpeg exited {result.returncode} ({detail}); partial kept at {partial.name}")
+        raise RuntimeError(f"ffmpeg exited {result.returncode} ({detail}); {discard_if_empty(partial)}")
     try:
         duration = probe_video(ffprobe, partial)
     except Exception as exc:
@@ -177,6 +204,8 @@ def download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, timeou
         raise FileExistsError(f"destination appeared during download; partial kept at {partial.name}")
     partial.rename(target)
     record = manifest_record(output, target, event, duration)
+    if not audio:
+        record["audioDropped"] = True
     append_manifest(manifest_path, record)
     manifest[relative] = record
     return "saved", target

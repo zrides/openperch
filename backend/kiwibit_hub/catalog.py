@@ -153,6 +153,8 @@ class Catalog:
                                 (stat.st_size, stat.st_mtime_ns, identity))
             self.db.execute("INSERT OR IGNORE INTO videos(id,path,name,size,modified) VALUES(?,?,?,?,?)",
                             (identity, stored, original_name, stat.st_size, stat.st_mtime_ns))
+        if existing and existing['result'] and (existing['size'], existing['modified']) != (stat.st_size, stat.st_mtime_ns):
+            self._remove_result_folder(self.root / Path(existing['result']).parent)
         return identity
 
     def videos(self):
@@ -240,10 +242,6 @@ class Catalog:
         stat = video.stat()
         if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
             raise ValueError("Video changed during processing; scan it again")
-        relative = Path("results") / (identity + "-" + uuid.uuid4().hex)
-        folder = self.root / relative
-        folder.mkdir(parents=True)
-        capture = cv2.VideoCapture(str(video))
         photos = []
         groups = collect_sightings(result['frames'])
         source_signature = f"{stat.st_size}:{stat.st_mtime_ns}"
@@ -252,6 +250,12 @@ class Catalog:
         for item in old:
             item['anchors'] = json.loads(item['anchors'])
         matched = sighting_matches(groups, old)
+        previous = row['result']
+        relative = Path("results") / (identity + "-" + uuid.uuid4().hex)
+        folder = self.root / relative
+        # Nothing may raise between creating these and the try that cleans them up.
+        folder.mkdir(parents=True)
+        capture = cv2.VideoCapture(str(video))
         committed = False
         try:
             if not capture.isOpened():
@@ -334,6 +338,13 @@ class Catalog:
         finally:
             capture.release()
             if not committed:
-                resolved = folder.resolve()
-                if resolved.is_relative_to((self.root / 'results').resolve()):
-                    shutil.rmtree(resolved)
+                self._remove_result_folder(folder)
+        if previous:
+            # The catalog no longer references the superseded analysis or its photos.
+            self._remove_result_folder(self.root / Path(previous).parent)
+
+    def _remove_result_folder(self, folder):
+        resolved = folder.resolve()
+        results = (self.root / 'results').resolve()
+        if resolved != results and resolved.is_relative_to(results) and resolved.is_dir():
+            shutil.rmtree(resolved, ignore_errors=True)
