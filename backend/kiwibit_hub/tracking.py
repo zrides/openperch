@@ -2,18 +2,25 @@
 
 Low-score detections can support existing tracks, never create new ones. Predicted
 boxes are used for matching only: output boxes always come from the detector.
+Tracks follow the animal, not the detector's label: YOLO-World renames the same
+animal between frames, so each track's category is decided once from all its frames.
 This is a small custom tracker, not the ByteTrack implementation or bird re-ID.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 import copy
 from dataclasses import dataclass
 import math
+from pathlib import Path
 
-TRACKER_VERSION = 1
+TRACKER_VERSION = 2
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
 MAX_GAP_MS = 1200
+NONBIRD_LABELS = set((Path(__file__).parent / 'nonbird-labels.txt').read_text(encoding='utf-8-sig').splitlines())
+# BioCLIP separates birds from other animals far more reliably than the detector's labels.
+CLASSIFIER_WEIGHT = .75
 
 
 def overlap(a, b):
@@ -96,11 +103,43 @@ def appearance_similarity(a, b):
     return sum(x*y for x, y in zip(a, b))/norm if norm else None
 
 
+def resolve_categories(frames, labels=None, nonbirds=NONBIRD_LABELS):
+    """Give each track one category, decided from all of its frames.
+
+    The detector's per-frame label is kept as 'detector_category'. BioCLIP's top
+    species votes bird or not bird, unless the species list has no non-bird names.
+    """
+    classifier_knows_nonbirds = labels is None or not nonbirds.isdisjoint(labels)
+    votes = defaultdict(lambda: {'detected': 0., 'bird': 0., 'other': defaultdict(float), 'ranked': 0, 'ranked_bird': 0})
+    for frame in frames:
+        for animal in frame['animals']:
+            vote = votes[animal['id']]
+            category = animal.setdefault('detector_category', animal['category'])
+            weight = animal.get('detection', .5)
+            vote['detected'] += weight
+            if category == 'bird':
+                vote['bird'] += weight
+            else:
+                vote['other'][category] += weight
+            if classifier_knows_nonbirds and animal.get('ranked'):
+                vote['ranked'] += 1
+                vote['ranked_bird'] += animal['ranked'][0]['label'] not in nonbirds
+    resolved = {}
+    for track, vote in votes.items():
+        evidence = vote['bird']/vote['detected']
+        if vote['ranked']:
+            evidence = (1-CLASSIFIER_WEIGHT)*evidence + CLASSIFIER_WEIGHT*vote['ranked_bird']/vote['ranked']
+        other = vote['other']
+        resolved[track] = 'bird' if evidence >= .5 else max(sorted(other), key=other.get, default='animal')
+    for frame in frames:
+        for animal in frame['animals']:
+            animal['category'] = resolved[animal['id']]
+
+
 @dataclass
 class Track:
     id: int
     box: list
-    category: str
     seen: float
     strong_seen: float
     appearance: list | None = None
@@ -123,8 +162,6 @@ class TemporalTracker:
         self.stats = {'tracks_started': 0, 'gap_recoveries': 0, 'weak_recoveries': 0, 'ambiguous_restarts': 0}
 
     def score(self, detection, track, ms, weak=False):
-        if detection['category'] != track.category:
-            return -1.
         gap = ms-track.seen
         if weak and (track.strong_hits < 2 or ms-track.strong_seen > 1200 or gap > 400):
             return -1.
@@ -183,7 +220,7 @@ class TemporalTracker:
                     and math.isfinite(item['detection']) and item['detection'] >= LOW_CONFIDENCE):
                 usable.append(item)
         # Spatial ordering makes births and ties independent of detector output order.
-        usable.sort(key=lambda d: (d['category'], *d['box']))
+        usable.sort(key=lambda d: (*d['box'], d['category']))
         high = [d for d in usable if d['detection'] >= HIGH_CONFIDENCE]
         low = [d for d in usable if d['detection'] < HIGH_CONFIDENCE]
         outputs, used = [], set()
@@ -219,8 +256,7 @@ class TemporalTracker:
                 for index, detection in enumerate(candidates):
                     if index in matched_rows:
                         continue
-                    track = Track(self.next_id, list(detection['box']), detection['category'], ms, ms,
-                                  detection.get('appearance'))
+                    track = Track(self.next_id, list(detection['box']), ms, ms, detection.get('appearance'))
                     self.next_id += 1
                     self.tracks[track.id] = track
                     used.add(track.id)
@@ -228,7 +264,8 @@ class TemporalTracker:
                     outputs.append(dict(detection, id=track.id, tracking_state='tentative', reacquired=False, gap_ms=0))
         return outputs
 
-    def finalize(self, frames):
+    def finalize(self, frames, labels=None):
+        resolve_categories(frames, labels)
         for frame in frames:
             for animal in frame['animals']:
                 animal['track_confirmed'] = animal['id'] in self.confirmed_ids
@@ -238,17 +275,19 @@ class TemporalTracker:
 def retrack_result(result, cancel=None, video=None, status=None, progress=None):
     """Re-associate saved detections without detector/BioCLIP inference.
 
-    An optional video supplies color descriptors for legacy analyses. Original
-    boxes, rankings and prior IDs remain available; missing detections are not made up.
+    An optional video supplies color descriptors for legacy analyses that lack them.
+    Original boxes, rankings and prior IDs remain available; missing detections are not made up.
     """
     from .cancel import check_cancel
     if cancel is not None:
         check_cancel(cancel)
     if result.get('tracker_version') == TRACKER_VERSION:
         return result
-    import cv2
     output = copy.deepcopy(result)
-    capture = cv2.VideoCapture(str(video)) if video is not None else None
+    capture = None
+    if video is not None and any('appearance' not in animal for frame in output['frames'] for animal in frame['animals']):
+        import cv2
+        capture = cv2.VideoCapture(str(video))
     tracker = TemporalTracker()
     try:
         if capture is not None and not capture.isOpened():
@@ -269,6 +308,8 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
             for animal in frame['animals']:
                 animal.setdefault('original_id', animal['id'])
                 animal.setdefault('detection', .5)
+                # Re-track from what the detector saw, not a previous track decision.
+                animal['category'] = animal.pop('detector_category', animal['category'])
                 if image is not None:
                     animal['appearance'] = appearance_descriptor(image, animal['box'])
                 for key in ('display_label', 'identification_note', 'sighting_id'):
@@ -276,7 +317,7 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
             frame['animals'] = tracker.update(frame['animals'], frame['ms'])
             if progress and index % 15 == 0:
                 progress(index+1, len(output['frames']))
-        output['tracking_stats'] = tracker.finalize(output['frames'])
+        output['tracking_stats'] = tracker.finalize(output['frames'], output.get('labels'))
         output['tracker_version'] = TRACKER_VERSION
         return output
     finally:

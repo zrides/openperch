@@ -254,11 +254,12 @@ class Engine:
         from .tracking import TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result
         key = cache_key(video, model_dir, labels)
         cached = None if force else read_cache(key)
-        if cached:
+        if cached and cached.get('tracker_version') == TRACKER_VERSION:
             check_cancel(cancel)
             status("Loaded saved analysis")
             return cached
-        legacy = None if force else read_cache(cache_key(video, model_dir, labels, version=2), version=2)
+        # Saved detections from an older tracker only need re-tracking, not inference.
+        legacy = cached or (None if force else read_cache(cache_key(video, model_dir, labels, version=2), version=2))
         if legacy:
             upgraded = retrack_result(legacy, cancel, video, status, progress)
             check_cancel(cancel)
@@ -321,7 +322,9 @@ class Engine:
                                 item['ranked'] = destination
                                 crops.append(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                                 destinations.append(destination)
-                    frames.append({'ms': round(time_ms, 2), 'animals': current})
+                    # Unrounded: frames of variable-rate live clips can be under 0.01 ms apart,
+                    # and saved timestamps must stay strictly increasing for re-tracking.
+                    frames.append({'ms': time_ms, 'animals': current})
                     classifications = {tid: state for tid, state in classifications.items() if tid in tracker.tracks}
                     index += 1
                 began = time.perf_counter()
@@ -345,7 +348,7 @@ class Engine:
         result = {"version": VERSION, "complete": True, "video": str(Path(video).resolve()),
                   "width": width, "height": height, "fps": fps, "labels": labels, "frames": frames,
                   "model": str(model_dir), "device": self.device,
-                  "tracker_version": TRACKER_VERSION, "tracking_stats": tracker.finalize(frames),
+                  "tracker_version": TRACKER_VERSION, "tracking_stats": tracker.finalize(frames, labels),
                   'performance': {**{k: round(v, 3) for k, v in timings.items()},
                       'analysis_seconds': round(time.perf_counter()-prepared, 3),
                       'detector_batch': self.detector_batch_size, 'classifier_batch': self.classification_batch_size,

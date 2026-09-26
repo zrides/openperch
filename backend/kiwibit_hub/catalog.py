@@ -15,10 +15,10 @@ from pathlib import Path
 from . import config
 from .cancel import Cancelled, check_cancel
 from .sightings import SMART_VERSION, collect_sightings, photo_quality, summarize, best_photos, sighting_matches
+from .tracking import NONBIRD_LABELS
 
 LIBRARY = config.LIBRARY
 EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
-NONBIRD_LABELS = set((Path(__file__).parent / 'nonbird-labels.txt').read_text(encoding='utf-8-sig').splitlines())
 
 
 def gallery_species(label):

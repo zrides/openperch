@@ -8,7 +8,7 @@ import math
 
 from .engine import iou
 
-SMART_VERSION = 3
+SMART_VERSION = 4
 UNCERTAIN = 'Uncertain bird'
 
 

@@ -72,11 +72,34 @@ class TrackerTests(unittest.TestCase):
             tracker.update([detection(.2, score=.15)], ms)
         self.assertEqual(tracker.update([detection(.2, score=.15)], 1500), [])
 
-    def test_other_categories_cannot_inherit_bird_identity(self):
+    def test_detector_relabelling_does_not_break_the_track(self):
+        # YOLO-World calls the same House finch 'bird', 'sheep' and 'dog' in consecutive frames.
         tracker = TemporalTracker()
-        first = tracker.update([detection(.2)], 0)[0]['id']
-        second = tracker.update([detection(.2, kind='squirrel')], 100)[0]['id']
-        self.assertNotEqual(first, second)
+        ids = {tracker.update([detection(.2, kind=kind)], ms)[0]['id']
+               for ms, kind in [(0, 'bird'), (100, 'sheep'), (200, 'dog'), (300, 'bird')]}
+        self.assertEqual(len(ids), 1)
+
+    def test_track_category_follows_the_species_model_over_detector_labels(self):
+        def track(kinds, label):
+            tracker = TemporalTracker()
+            frames = []
+            for index, kind in enumerate(kinds):
+                animal = dict(detection(.2, kind=kind), ranked=[{'label': label, 'similarity': .5}])
+                frames.append({'ms': index*100, 'animals': tracker.update([animal], index*100)})
+            tracker.finalize(frames, ['House finch', 'Eastern gray squirrel'])
+            return [a for f in frames for a in f['animals']]
+        finch = track(['sheep', 'dog', 'sheep', 'bird'], 'House finch')
+        self.assertEqual({a['category'] for a in finch}, {'bird'})
+        self.assertEqual([a['detector_category'] for a in finch], ['sheep', 'dog', 'sheep', 'bird'])
+        squirrel = track(['bird', 'bird', 'bear'], 'Eastern gray squirrel')
+        self.assertEqual({a['category'] for a in squirrel}, {'bear'})
+        self.assertEqual({a['category'] for a in track(['bird', 'bird'], 'Eastern gray squirrel')}, {'animal'})
+
+    def test_birds_only_species_list_leaves_bird_or_not_to_the_detector(self):
+        tracker = TemporalTracker()
+        frames = [{'ms': ms, 'animals': tracker.update([detection(.2, kind='bear')], ms)} for ms in (0, 100)]
+        tracker.finalize(frames, ['House finch', 'Northern cardinal'])
+        self.assertEqual({a['category'] for f in frames for a in f['animals']}, {'bear'})
 
     def test_crossing_distinct_appearances_keep_identities_when_detection_order_flips(self):
         tracker = TemporalTracker()
@@ -137,6 +160,39 @@ class TrackerTests(unittest.TestCase):
         with self.assertRaises(Cancelled):
             retrack_result(original, cancel)
         self.assertEqual(original, snapshot)
+
+    def test_retracking_uses_detector_labels_and_skips_decoding_when_colors_are_saved(self):
+        # A tracker-v1 result: the finch broke into two tracks when the detector said 'sheep'.
+        original = {'tracker_version': 1, 'labels': ['House finch', 'Eastern gray squirrel'], 'frames': [
+            {'ms': ms, 'animals': [dict(detection(.2, kind=kind, appearance=[1., 0.]), id=old,
+                                        ranked=[{'label': 'House finch', 'similarity': .5}])]}
+            for ms, kind, old in [(0, 'bird', 1), (100, 'bird', 1), (200, 'sheep', 2), (300, 'sheep', 2)]]}
+        upgraded = retrack_result(original, video=Path('missing-video.mp4'))
+        animals = [f['animals'][0] for f in upgraded['frames']]
+        self.assertEqual(len({a['id'] for a in animals}), 1)
+        self.assertEqual({a['category'] for a in animals}, {'bird'})
+        self.assertEqual([a['detector_category'] for a in animals], ['bird', 'bird', 'sheep', 'sheep'])
+        # Re-tracking again starts from the detector's labels, not the resolved ones.
+        upgraded['tracker_version'] = 1
+        again = retrack_result(upgraded)
+        self.assertEqual([f['animals'][0]['detector_category'] for f in again['frames']], ['bird', 'bird', 'sheep', 'sheep'])
+
+    def test_cached_analysis_from_an_older_tracker_is_retracked_without_models(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            video = root/'video.mp4'
+            video.write_bytes(b'video')
+            (root/'open_clip_model.safetensors').write_bytes(b'weights')
+            (root/'open_clip_config.json').write_text('{}')
+            engine = Engine()
+            engine.prepare = Mock(side_effect=AssertionError('No model inference expected'))
+            cached = {'complete': True, 'version': VERSION, 'tracker_version': 1, 'frames': [{'ms': 0, 'animals': []}]}
+            with patch('kiwibit_hub.engine.read_cache', return_value=copy.deepcopy(cached)), \
+                 patch('kiwibit_hub.engine.write_cache') as write:
+                result = engine.analyze(video, root, ['bird', 'squirrel'], lambda _: None, lambda *_: None, threading.Event())
+            self.assertEqual(result['tracker_version'], TRACKER_VERSION)
+            write.assert_called_once()
+            engine.prepare.assert_not_called()
 
     def test_legacy_cache_upgrade_never_loads_ai_models(self):
         with tempfile.TemporaryDirectory() as folder:

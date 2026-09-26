@@ -122,6 +122,37 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertEqual([f['animals'][0]['ranked'][0]['label'] for f in results[1]['frames']],
                          [f'view-{i//5}' for i in range(21)])
 
+    def test_saved_timestamps_of_frames_under_a_hundredth_of_a_millisecond_apart_can_be_retracked(self):
+        # A clip recorded from live view had frames 0.002 ms apart; rounding saved them as one time.
+        from kiwibit_hub.tracking import retrack_result
+        class Values:
+            def __init__(self, values): self.values = values
+            def cpu(self): return self
+            def int(self): return self
+            def tolist(self): return self.values
+        class Detector:
+            def predict(self, images, **kwargs):
+                images = images if isinstance(images, list) else [images]
+                return [SimpleNamespace(boxes=SimpleNamespace(xyxy=Values([]), conf=Values([]), cls=Values([])))
+                        for _ in images]
+        (self.root/'open_clip_model.safetensors').write_bytes(b'weights')
+        (self.root/'open_clip_config.json').write_text('{}')
+        real_read = VideoFrames._read
+        def read(source, capture, info):
+            item = real_read(source, capture, info)
+            return item and (item[0], 2162.849 + item[0]*.002, item[2])
+        engine = Engine(1, 1, 0)
+        engine.prepare = Mock()
+        engine.device = 'cpu'
+        engine.detector = Detector()
+        with patch.object(VideoFrames, '_read', read), patch('kiwibit_hub.engine.write_cache'):
+            result = engine.analyze(self.video, self.root, ['bird', 'squirrel'],
+                                    lambda _: None, lambda *_: None, threading.Event(), force=True)
+        times = [f['ms'] for f in result['frames']]
+        self.assertEqual(times, sorted(set(times)))
+        result['tracker_version'] = 0
+        retrack_result(result)
+
     def test_next_video_analysis_overlaps_gallery_save(self):
         second = self.root/'second.avi'
         shutil.copy2(self.video, second)
