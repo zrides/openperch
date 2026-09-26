@@ -1,20 +1,21 @@
-// App-wide reactive state fed by the hub's event stream.
-import { api, subscribe, type JobState, type LiveStatus } from './api';
+// App-wide reactive state: the session, and the hub's event stream once signed in.
+import { api, setUnauthorizedHandler, subscribe, type JobState, type LiveStatus, type Session } from './api';
+
+const idleLive: LiveStatus = { state: 'idle', detail: '', resolution: null, viewers: 0, running: false };
+const idleJob: JobState = { action: null, running: false, message: '', value: 0, total: 0 };
 
 export const hub = $state({
-  live: { state: 'idle', detail: '', resolution: null, viewers: 0, running: false } as LiveStatus,
-  job: { action: null, running: false, message: '', value: 0, total: 0 } as JobState,
-  connected: false,
+  session: null as Session | null, // null until the first check completes
+  live: { ...idleLive },
+  job: { ...idleJob },
 });
 
-let started = false;
+let unsubscribe: (() => void) | null = null;
 
-export function startHub() {
-  if (started) return;
-  started = true;
+function startEvents() {
+  if (unsubscribe) return;
   api.get<LiveStatus>('/api/live').then((live) => { hub.live = live; }).catch(() => {});
-  subscribe((event) => {
-    hub.connected = true;
+  unsubscribe = subscribe((event) => {
     switch (event.kind) {
       case 'live': {
         const { kind: _, ...live } = event;
@@ -36,3 +37,43 @@ export function startHub() {
     }
   });
 }
+
+function stopEvents() {
+  unsubscribe?.();
+  unsubscribe = null;
+  hub.live = { ...idleLive };
+  hub.job = { ...idleJob };
+}
+
+function signedOut() {
+  stopEvents();
+  hub.session = { authenticated: false, user: null, auth_required: true };
+}
+
+export async function checkSession() {
+  try {
+    const response = await fetch('/api/session');
+    hub.session = (await response.json()) as Session;
+  } catch {
+    hub.session = { authenticated: false, user: null, auth_required: true };
+  }
+  if (hub.session.authenticated) startEvents();
+  else stopEvents();
+}
+
+export async function signIn(username: string, password: string, remember: boolean) {
+  await api.post('/api/login', { username, password, remember });
+  await checkSession();
+}
+
+export async function signOut() {
+  try {
+    await api.post('/api/logout');
+  } finally {
+    signedOut();
+  }
+}
+
+setUnauthorizedHandler(() => {
+  if (hub.session?.authenticated) signedOut();
+});

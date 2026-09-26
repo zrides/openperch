@@ -8,7 +8,8 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     port: 5173,
-    proxy: { '/api': { target: hub, ws: true, changeOrigin: true } },
+    // Keep the browser's Host header: the hub refuses cross-origin writes.
+    proxy: { '/api': { target: hub, ws: true, changeOrigin: false } },
   },
   build: { outDir: 'dist', emptyOutDir: true },
 });

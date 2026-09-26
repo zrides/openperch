@@ -6,13 +6,10 @@ Interactive API documentation is served at /docs.
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import logging
-import os
 import re
-import secrets
 import urllib.error
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config
+from .auth import SESSION_COOKIE, SESSION_SECONDS, Credentials, LoginLimiter
 from .camera import CameraService
 from .catalog import Catalog
 from .jobs import JobRunner
@@ -39,32 +37,24 @@ log = logging.getLogger('kiwibit_hub.server')
 API_ACTIONS = {'scan', 'process', 'selected', 'reanalyze', 'fetch', 'verify', 'upgrade'}
 
 
-class Credentials:
-    """HTTP Basic credentials from KIWIBIT_HUB_USER / KIWIBIT_HUB_PASSWORD."""
+# Reachable without signing in: the login itself and the web app's static files.
+PUBLIC_API = {'/api/health', '/api/login', '/api/logout', '/api/session'}
+SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
 
-    def __init__(self, user, password):
-        self.user, self.password = user, password
 
-    @classmethod
-    def from_env(cls):
-        password = os.environ.get('KIWIBIT_HUB_PASSWORD', '')
-        if not password and os.environ.get('KIWIBIT_HUB_ALLOW_NO_AUTH') != '1':
-            raise RuntimeError('Set KIWIBIT_HUB_PASSWORD (or KIWIBIT_HUB_ALLOW_NO_AUTH=1 for local development). '
-                               'The hub can control the camera and holds the account token.')
-        return cls(os.environ.get('KIWIBIT_HUB_USER', 'kiwibit'), password) if password else None
+def same_origin(headers):
+    """Reject cross-site requests: a present Origin must match the host the browser used."""
+    origin = headers.get('origin')
+    if not origin:
+        return True  # not a browser cross-origin request (curl, same-origin GET)
+    netloc = urllib.parse.urlsplit(origin).netloc
+    return netloc in {headers.get('host'), headers.get('x-forwarded-host')}
 
-    def check(self, header):
-        scheme, _, value = (header or '').partition(' ')
-        if scheme.lower() != 'basic':
-            return False
-        try:
-            user, _, password = base64.b64decode(value, validate=True).decode('utf-8').partition(':')
-        except (binascii.Error, UnicodeDecodeError):
-            return False
-        # Evaluate both comparisons so timing does not reveal which one failed.
-        user_ok = secrets.compare_digest(user.encode(), self.user.encode())
-        password_ok = secrets.compare_digest(password.encode(), self.password.encode())
-        return user_ok and password_ok
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    remember: bool = True
 
 
 class JobRequest(BaseModel):
@@ -120,11 +110,18 @@ def recorded_at(name):
 
 
 def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True,
-               live=None, camera=None, web=None):
+               live=None, camera=None, web=None, limiter=None):
     library = Path(library) if library is not None else config.LIBRARY
     media_root = Path(media_root) if media_root is not None else config.DATA
     web = Path(web) if web is not None else config.WEB
     hub = EventHub()
+    limiter = limiter or LoginLimiter()
+
+    def signed_in(headers, cookies):
+        if credentials is None:
+            return 'local'
+        return credentials.verify(cookies.get(SESSION_COOKIE)) or (
+            credentials.user if credentials.check(headers.get('authorization')) else None)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -151,13 +148,47 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
 
     app = FastAPI(title='Kiwibit Hub', version='0.1.0', lifespan=lifespan)
 
-    if credentials is not None:
-        @app.middleware('http')
-        async def require_auth(request: Request, call_next):
-            if request.url.path != '/api/health' and not credentials.check(request.headers.get('authorization')):
-                return JSONResponse({'detail': 'Authentication required'}, status_code=401,
-                                    headers={'WWW-Authenticate': 'Basic realm="Kiwibit Hub"'})
-            return await call_next(request)
+    @app.middleware('http')
+    async def guard(request: Request, call_next):
+        if request.method not in SAFE_METHODS and not same_origin(request.headers):
+            return JSONResponse({'detail': 'Cross-site request refused'}, status_code=403)
+        path = request.url.path
+        protected = path.startswith('/api/') or path in ('/docs', '/redoc', '/openapi.json')
+        if protected and path not in PUBLIC_API and not signed_in(request.headers, request.cookies):
+            # No WWW-Authenticate header: browsers show the app's sign-in page, not a popup.
+            return JSONResponse({'detail': 'Sign in required'}, status_code=401)
+        return await call_next(request)
+
+    @app.get('/api/session')
+    def session(request: Request):
+        user = signed_in(request.headers, request.cookies)
+        return {'authenticated': user is not None, 'user': user, 'auth_required': credentials is not None}
+
+    @app.post('/api/login')
+    def login(body: LoginRequest, request: Request):
+        if credentials is None:
+            return {'user': 'local'}
+        client = request.client.host if request.client else 'unknown'
+        wait = limiter.blocked(client)
+        if wait:
+            raise HTTPException(429, f'Too many failed attempts. Try again in {wait} seconds.',
+                                headers={'Retry-After': str(wait)})
+        if not credentials.verify_password(body.username.strip(), body.password):
+            limiter.failure(client)
+            log.warning('Failed sign-in from %s', client)
+            raise HTTPException(401, 'Wrong username or password')
+        limiter.success(client)
+        log.info('Signed in from %s', client)
+        response = JSONResponse({'user': credentials.user})
+        response.set_cookie(SESSION_COOKIE, credentials.issue(), max_age=SESSION_SECONDS if body.remember else None,
+                            httponly=True, samesite='lax', secure=request.url.scheme == 'https', path='/')
+        return response
+
+    @app.post('/api/logout')
+    def logout():
+        response = JSONResponse({'authenticated': False})
+        response.delete_cookie(SESSION_COOKIE, path='/')
+        return response
 
     def catalog():
         # One connection per request; FastAPI may run a sync dependency and its
@@ -347,7 +378,7 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
 
     @app.websocket('/api/events')
     async def events(websocket: WebSocket):
-        if credentials is not None and not credentials.check(websocket.headers.get('authorization')):
+        if not same_origin(websocket.headers) or not signed_in(websocket.headers, websocket.cookies):
             await websocket.close(code=1008)
             return
         await websocket.accept()

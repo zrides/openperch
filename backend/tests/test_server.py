@@ -60,7 +60,8 @@ class ServerTests(unittest.TestCase):
         for path in ('/api/recordings', '/api/status', '/docs', '/openapi.json'):
             response = anonymous.get(path)
             self.assertEqual(response.status_code, 401, path)
-            self.assertIn('Basic', response.headers['www-authenticate'])
+            # No Basic challenge: browsers must show the sign-in page, not a popup.
+            self.assertNotIn('www-authenticate', response.headers)
         self.assertEqual(anonymous.get('/api/recordings', headers=basic('kiwibit', 'wrong')).status_code, 401)
         self.assertEqual(anonymous.get('/api/recordings', headers={'Authorization': 'Basic !!!'}).status_code, 401)
         with self.assertRaises(WebSocketDisconnect):

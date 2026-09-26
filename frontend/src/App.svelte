@@ -1,7 +1,8 @@
 <script lang="ts">
   import Nav from './lib/Nav.svelte';
-  import { startHub } from './lib/hub.svelte';
+  import { checkSession, hub } from './lib/hub.svelte';
   import Live from './pages/Live.svelte';
+  import Login from './pages/Login.svelte';
   import ComingSoon from './pages/ComingSoon.svelte';
 
   const pages: Record<string, { title: string; summary: string }> = {
@@ -22,9 +23,14 @@
     addEventListener('hashchange', update);
     return () => removeEventListener('hashchange', update);
   });
-  startHub();
+  checkSession();
 </script>
 
+{#if hub.session === null}
+  <div class="loading" aria-busy="true"></div>
+{:else if !hub.session.authenticated}
+  <Login />
+{:else}
 <div class="shell">
   <Nav {route} />
   <main>
@@ -35,8 +41,10 @@
     {/if}
   </main>
 </div>
+{/if}
 
 <style>
+  .loading { min-height: 100vh; }
   .shell { display: flex; min-height: 100vh; min-height: 100dvh; }
   main { flex-grow: 1; min-width: 0; }
   @media (max-width: 860px) {

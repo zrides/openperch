@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon, { type IconName } from './Icon.svelte';
   import { api } from './api';
-  import { hub } from './hub.svelte';
+  import { hub, signOut } from './hub.svelte';
 
   let { route }: { route: string } = $props();
 
@@ -39,6 +39,12 @@
       <div class="bar"><div style:width={percent === null ? '30%' : `${percent}%`}></div></div>
       <button class="btn stop" type="button" onclick={() => api.post('/api/jobs/cancel')}>Stop</button>
     </section>
+  {/if}
+  {#if hub.session?.auth_required}
+    <div class="account">
+      <span class="muted small">Signed in as {hub.session.user}</span>
+      <button type="button" class="link" onclick={signOut}>Sign out</button>
+    </div>
   {/if}
 </nav>
 
@@ -78,6 +84,11 @@
   .bar { height: 6px; border-radius: 3px; background: #E3DED1; overflow: hidden; }
   .bar div { height: 100%; background: var(--spruce); }
   .stop { min-height: 36px; font-size: 13px; }
+  .account { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px; }
+  .link {
+    border: none; background: none; padding: 8px 0; min-height: 36px; color: var(--spruce); font-weight: 600;
+    font-size: 13px; cursor: pointer; text-decoration: underline;
+  }
 
   .tabs { display: none; }
 

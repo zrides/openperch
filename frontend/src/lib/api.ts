@@ -1,9 +1,15 @@
-// Thin client for the hub API. The browser handles HTTP Basic credentials.
+// Thin client for the hub API. Authentication is the session cookie set by /api/login.
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
+}
+
+// Called when the hub says the session is gone (signed out, expired, password changed).
+let onUnauthorized: () => void = () => {};
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler;
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -12,6 +18,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (response.status === 401 && !path.startsWith('/api/login')) onUnauthorized();
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {
@@ -61,6 +68,12 @@ export interface Recording {
   species: string[];
 }
 
+export interface Session {
+  authenticated: boolean;
+  user: string | null;
+  auth_required: boolean;
+}
+
 export interface JobState {
   action: string | null;
   running: boolean;
@@ -83,6 +96,11 @@ export function subscribe(onEvent: (event: HubEvent) => void): () => void {
   let delay = 1000;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  const retry = () => {
+    if (closed) return;
+    timer = setTimeout(connect, delay);
+    delay = Math.min(delay * 2, 15000);
+  };
   const connect = () => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     socket = new WebSocket(`${scheme}://${location.host}/api/events`);
@@ -96,8 +114,15 @@ export function subscribe(onEvent: (event: HubEvent) => void): () => void {
     };
     socket.onclose = () => {
       if (closed) return;
-      timer = setTimeout(connect, delay);
-      delay = Math.min(delay * 2, 15000);
+      // A refused handshake looks like any other drop (code 1006), so ask
+      // whether we are still signed in before retrying.
+      fetch('/api/session')
+        .then((response) => response.json() as Promise<Session>)
+        .then((session) => {
+          if (!session.authenticated) onUnauthorized();
+          else retry();
+        })
+        .catch(retry);
     };
   };
   connect();

@@ -154,7 +154,7 @@ class LiveApiTests(unittest.TestCase):
     def test_live_requires_authentication(self):
         anonymous = TestClient(self.client.app)
         for method, path in [('get', '/api/live'), ('post', '/api/live/start'), ('post', '/api/live/offer'),
-                             ('get', '/api/camera'), ('get', '/')]:
+                             ('get', '/api/camera')]:
             self.assertEqual(getattr(anonymous, method)(path).status_code, 401, path)
 
     def test_web_app_is_served_after_api_routes(self):

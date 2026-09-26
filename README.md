@@ -77,7 +77,11 @@ connection routes its browser offered. Live view is video only for now.
 | `GET /api/live`, `POST /api/live/start` | Live session status; start at `{"resolution": "1280x720" \| "1920x1080" \| "3840x2160"}` |
 | `POST /api/live/offer`, `POST /api/live/stop` | Browser SDP offer → answer; end the session |
 
-Everything except `/api/health` requires HTTP Basic authentication.
+Sign in on the web page (a 30-day HttpOnly session cookie; changing the
+password signs every device out). Scripts can use HTTP Basic with the same
+account. Everything under `/api` except health and sign-in requires one of the
+two, and cross-site requests are refused. Five failed sign-ins lock sign-in
+for five minutes.
 
 ## Develop without Docker
 
