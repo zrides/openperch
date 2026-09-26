@@ -10,17 +10,28 @@ import base64
 import binascii
 import logging
 import os
+import re
 import secrets
+import urllib.error
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config
+from .camera import CameraService
 from .catalog import Catalog
 from .jobs import JobRunner
+from .kiwibit_api import KiwibitError
+from .live import LiveError, LiveManager
+
+# Downloaded recordings are named <UTC start>_<digest>.mp4, e.g. 20260925T185753Z_3a88a9623053ee38.mp4.
+RECORDED_AT = re.compile(r'^(\d{8}T\d{6}Z)_')
+CLOUD_ERRORS = (OSError, KiwibitError, ValueError, KeyError)
 
 log = logging.getLogger('kiwibit_hub.server')
 
@@ -66,6 +77,14 @@ class CorrectionRequest(BaseModel):
     label: str | None
 
 
+class LiveStart(BaseModel):
+    resolution: str = '1280x720'
+
+
+class LiveOffer(BaseModel):
+    sdp: str
+
+
 class ProcessingSettings(BaseModel):
     detector_batch: int
     classifier_batch: int
@@ -93,9 +112,18 @@ class EventHub:
         queue.put_nowait(event)
 
 
-def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True):
+def recorded_at(name):
+    match = RECORDED_AT.match(name)
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).isoformat()
+
+
+def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True,
+               live=None, camera=None, web=None):
     library = Path(library) if library is not None else config.LIBRARY
     media_root = Path(media_root) if media_root is not None else config.DATA
+    web = Path(web) if web is not None else config.WEB
     hub = EventHub()
 
     @asynccontextmanager
@@ -107,6 +135,9 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         startup.recover()
         startup.close()
         app.state.runner = runner or JobRunner(library, media_root=media_root)
+        app.state.live = live or LiveManager()
+        app.state.live.listener = lambda status: hub.publish('live', **status)
+        app.state.camera = camera or CameraService()
         hub.loop = asyncio.get_running_loop()
         unsubscribe = app.state.runner.subscribe(hub.publish)
         log.info('Hub started: library=%s', library)
@@ -114,6 +145,7 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             yield
         finally:
             unsubscribe()
+            await asyncio.to_thread(app.state.live.shutdown)
             await asyncio.to_thread(app.state.runner.shutdown, 60)
             log.info('Hub stopped')
 
@@ -139,6 +171,12 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def runner_of(request: Request) -> JobRunner:
         return request.app.state.runner
 
+    def live_of(request: Request) -> LiveManager:
+        return request.app.state.live
+
+    def camera_of(request: Request) -> CameraService:
+        return request.app.state.camera
+
     def video_row(db, identity):
         row = db.db.execute('SELECT * FROM videos WHERE id=?', (identity,)).fetchone()
         if row is None:
@@ -161,10 +199,13 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
                 'unmatched_corrections': len(db.unmatched_corrections()), 'job': runner.state}
 
     @app.get('/api/recordings')
-    def recordings(q: str = '', db: Catalog = Depends(catalog)):
+    def recordings(q: str = '', limit: int = 0, db: Catalog = Depends(catalog)):
         text = q.casefold()
-        return [{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size')}
+        species = db.video_species()
+        rows = [{**{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size')},
+                 'recorded_at': recorded_at(row['name']), 'species': species.get(row['id'], [])}
                 for row in db.videos() if text in (row['name'] + ' ' + row['status']).casefold()]
+        return rows[:limit] if limit > 0 else rows
 
     @app.get('/api/recordings/{identity}/video')
     def video(identity: str, db: Catalog = Depends(catalog)):
@@ -252,6 +293,58 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         runner.cancel()
         return runner.state
 
+    @app.get('/api/camera')
+    def camera_summary(refresh: bool = False, camera: CameraService = Depends(camera_of)):
+        try:
+            return camera.summary(refresh)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except CLOUD_ERRORS as exc:
+            log.warning('Camera lookup failed: %s', exc)
+            raise HTTPException(502, 'Could not reach the Kiwibit service. Check the account token.') from exc
+
+    @app.post('/api/camera/wake', status_code=202)
+    def wake_camera(camera: CameraService = Depends(camera_of)):
+        try:
+            camera.wake()
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except CLOUD_ERRORS as exc:
+            log.warning('Wake failed: %s', exc)
+            raise HTTPException(502, 'The wake request failed') from exc
+        return {'status': 'waking'}
+
+    @app.get('/api/live')
+    def live_status(live: LiveManager = Depends(live_of)):
+        return live.status()
+
+    @app.post('/api/live/start')
+    def live_start(body: LiveStart, live: LiveManager = Depends(live_of), camera: CameraService = Depends(camera_of)):
+        try:
+            device = camera.summary()
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except CLOUD_ERRORS as exc:
+            log.warning('Live start failed: %s', exc)
+            raise HTTPException(502, 'Could not reach the Kiwibit service') from exc
+        if not device['can_watch_live']:
+            raise HTTPException(409, 'This camera does not allow live viewing')
+        try:
+            return live.start(camera.token(), device['serial'], body.resolution)
+        except LiveError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/live/offer')
+    def live_offer(body: LiveOffer, live: LiveManager = Depends(live_of)):
+        try:
+            return {'sdp': live.offer(body.sdp)}
+        except LiveError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/live/stop')
+    def live_stop(live: LiveManager = Depends(live_of)):
+        return live.stop()
+
     @app.websocket('/api/events')
     async def events(websocket: WebSocket):
         if credentials is not None and not credentials.check(websocket.headers.get('authorization')):
@@ -268,6 +361,10 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             pass
         finally:
             hub.queues.discard(queue)
+
+    if (web / 'index.html').is_file():
+        # Mounted last so every /api route takes precedence.
+        app.mount('/', StaticFiles(directory=web, html=True), name='web')
 
     return app
 

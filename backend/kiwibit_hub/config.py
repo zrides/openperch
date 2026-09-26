@@ -31,5 +31,7 @@ LOGS = DATA / 'logs'
 # BioCLIP folder containing open_clip_config.json and open_clip_model.safetensors.
 BIOCLIP = _path('KIWIBIT_BIOCLIP_DIR', MODELS / 'bioclip-2.5-vith14')
 SPECIES = _path('KIWIBIT_SPECIES_FILE', PACKAGE / 'species.txt')
+# Built web UI (frontend/dist copied here by the Docker build).
+WEB = _path('KIWIBIT_WEB_DIR', PACKAGE / 'web')
 # Kiwibit account configuration (bearer token). Mounted read-only; never copied into data.
 ACCOUNT_CONFIG = _path('KIWIBIT_ACCOUNT_CONFIG', REPO / 'secrets' / 'kiwibit-account.json')

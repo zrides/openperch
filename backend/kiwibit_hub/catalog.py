@@ -168,6 +168,14 @@ class Catalog:
                 (SELECT video_id, count(*) AS photos FROM photos GROUP BY video_id) p
             ON p.video_id=v.id ORDER BY v.name DESC""").fetchall()
 
+    def video_species(self):
+        """Species photographed in each video, most photographed first."""
+        species = {}
+        for video_id, name, _ in self.db.execute(
+                'SELECT video_id, species, count(*) AS n FROM photos GROUP BY video_id, species ORDER BY n DESC'):
+            species.setdefault(video_id, []).append(name)
+        return species
+
     def state(self, identity, status, error=""):
         with self.db:
             self.db.execute("UPDATE videos SET status=?,error=? WHERE id=?", (status, error, identity))
