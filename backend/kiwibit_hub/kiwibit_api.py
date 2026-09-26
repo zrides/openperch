@@ -7,12 +7,13 @@ Every call is POST + JSON, wrapped in a common envelope, and answered with
 
 import gzip
 import json
-import os
 import secrets
 import urllib.error
 import urllib.request
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+from . import config
+
+CONFIG_PATH = config.ACCOUNT_CONFIG
 
 USER_AGENT = "AddxAi/2.24.0 (com.kb.kiwibit; build:3022; iOS 27.0.0) Alamofire/3.2.1"
 

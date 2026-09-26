@@ -9,11 +9,13 @@ import os
 import threading
 import time
 from pathlib import Path
-from video_pipeline import MAX_BATCH_SIZE, SUPPORTED_BATCH_SIZES
 
-HERE = Path(__file__).resolve().parent
-DATA = HERE / "data"
-MODELS = HERE / "models"
+from . import config
+from .cancel import Cancelled, check_cancel
+from .video_pipeline import MAX_BATCH_SIZE, SUPPORTED_BATCH_SIZES
+
+DATA = config.CACHE
+MODELS = config.MODELS
 os.environ.setdefault("HF_HOME", str(MODELS / "huggingface"))
 os.environ.setdefault("YOLO_CONFIG_DIR", str(DATA / "ultralytics"))
 os.environ.setdefault("XDG_CACHE_HOME", str(MODELS / "cache"))
@@ -25,15 +27,6 @@ DEFAULT_CLASSIFICATION_BATCH = 32
 ANIMALS = ["bird", "squirrel", "chipmunk", "rabbit", "raccoon", "opossum", "deer",
            "fox", "cat", "dog", "bear", "rodent", "horse", "cow", "sheep", "goat",
            "pig", "elephant", "giraffe", "zebra", "monkey", "lizard", "snake", "turtle", "frog"]
-
-
-class Cancelled(Exception):
-    pass
-
-
-def check_cancel(event):
-    if event.is_set():
-        raise Cancelled()
 
 
 def read_labels(path):
@@ -113,7 +106,7 @@ class Engine:
 
     def detect_batch(self, images, cancel):
         """One model owner; shrink batches on CUDA memory pressure without dropping frames."""
-        from tracking import LOW_CONFIDENCE
+        from .tracking import LOW_CONFIDENCE
         results = []
         start = 0
         while start < len(images):
@@ -244,7 +237,7 @@ class Engine:
 
     def analyze(self, video, model_dir, labels, status, progress, cancel, force=False):
         import cv2
-        from tracking import TemporalTracker, TRACKER_VERSION, LOW_CONFIDENCE, appearance_descriptor, retrack_result
+        from .tracking import TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result
         key = cache_key(video, model_dir, labels)
         cached = None if force else read_cache(key)
         if cached:
@@ -272,7 +265,7 @@ class Engine:
         classifications = {}
         index = 0
         status("Detecting animals and ranking species…")
-        from video_pipeline import VideoFrames
+        from .video_pipeline import VideoFrames
         with VideoFrames(video, cancel, self.decode_queue) as source:
             fps, frame_count = source.info['fps'], source.info['frame_count']
             width, height = source.info['width'], source.info['height']
@@ -355,8 +348,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("video", type=Path)
-    parser.add_argument("--model", type=Path, default=HERE.parent / "bioclip-2.5-vith14")
-    parser.add_argument("--labels", type=Path, default=HERE / "species.txt")
+    parser.add_argument("--model", type=Path, default=config.BIOCLIP)
+    parser.add_argument("--labels", type=Path, default=config.SPECIES)
     parser.add_argument('--fresh', action='store_true', help='run detection and classification again instead of using saved analysis')
     parser.add_argument('--batch-size', type=int, choices=SUPPORTED_BATCH_SIZES, default=DEFAULT_DETECTOR_BATCH)
     parser.add_argument('--crop-batch-size', type=int, choices=SUPPORTED_BATCH_SIZES, default=DEFAULT_CLASSIFICATION_BATCH)

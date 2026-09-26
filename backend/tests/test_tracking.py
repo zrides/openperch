@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 from types import SimpleNamespace
 import test_catalog as fixtures
 
-from tracking import TemporalTracker, global_assignment, retrack_result, TRACKER_VERSION
-from engine import Engine, Cancelled, VERSION
-from sightings import collect_sightings
+from kiwibit_hub.tracking import TemporalTracker, global_assignment, retrack_result, TRACKER_VERSION
+from kiwibit_hub.engine import Engine, Cancelled, VERSION
+from kiwibit_hub.sightings import collect_sightings
 
 
 def detection(x, score=.9, kind='bird', appearance=None, width=.12):
@@ -148,9 +148,9 @@ class TrackerTests(unittest.TestCase):
             engine = Engine()
             engine.prepare = Mock(side_effect=AssertionError('No model inference expected'))
             legacy = {'complete': True, 'version': 2, 'frames': [{'ms': 0, 'animals': []}]}
-            with patch('engine.read_cache', side_effect=[None, legacy]), \
-                 patch('tracking.retrack_result', return_value=copy.deepcopy(legacy)), \
-                 patch('engine.write_cache') as write:
+            with patch('kiwibit_hub.engine.read_cache', side_effect=[None, legacy]), \
+                 patch('kiwibit_hub.tracking.retrack_result', return_value=copy.deepcopy(legacy)), \
+                 patch('kiwibit_hub.engine.write_cache') as write:
                 result = engine.analyze(video, root, ['bird', 'squirrel'], lambda _: None, lambda *_: None, threading.Event())
                 self.assertEqual(result['version'], VERSION)
                 write.assert_called_once()
@@ -162,7 +162,7 @@ class EngineTrackingTests(unittest.TestCase):
     tearDown = fixtures.CatalogTests.tearDown
 
     def test_cancelled_fresh_analysis_preserves_previous_ready_gallery(self):
-        from bird_library import LibraryJob
+        from kiwibit_hub.jobs import LibraryJob
         identity = self.db.ingest(self.video)
         self.db.save_analysis(identity, self.result, threading.Event())
         prior = self.db.videos()[0]['result']
@@ -206,8 +206,8 @@ class EngineTrackingTests(unittest.TestCase):
                 classifications.append(engine.detector.index-1)
             return [[{'label': 'Northern cardinal', 'similarity': .5, 'score': .8}] for _ in crops]
         engine.classify = classify
-        with patch('engine.read_cache', side_effect=AssertionError('Fresh analysis must bypass caches')), \
-             patch('engine.write_cache'):
+        with patch('kiwibit_hub.engine.read_cache', side_effect=AssertionError('Fresh analysis must bypass caches')), \
+             patch('kiwibit_hub.engine.write_cache'):
             result = engine.analyze(self.video, self.root, ['bird', 'squirrel'], lambda _: None,
                                     lambda *_: None, threading.Event(), force=True)
         self.assertEqual(classifications, [0, 4])

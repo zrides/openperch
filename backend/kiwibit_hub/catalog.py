@@ -12,11 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
-from engine import Cancelled, check_cancel
-from sightings import SMART_VERSION, collect_sightings, photo_quality, summarize, best_photos, sighting_matches
+from . import config
+from .cancel import Cancelled, check_cancel
+from .sightings import SMART_VERSION, collect_sightings, photo_quality, summarize, best_photos, sighting_matches
 
-ROOT = Path(__file__).resolve().parent.parent
-LIBRARY = ROOT / "bird-library"
+LIBRARY = config.LIBRARY
 EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 NONBIRD_LABELS = set((Path(__file__).parent / 'nonbird-labels.txt').read_text(encoding='utf-8-sig').splitlines())
 
@@ -48,10 +48,13 @@ def encode_photo(crop, box, target, cancel):
 
 
 class Catalog:
-    def __init__(self, root=LIBRARY):
-        self.root = Path(root)
+    def __init__(self, root=None, media_root=None, check_same_thread=True):
+        self.root = Path(root) if root is not None else LIBRARY
+        # Videos under media_root are stored relative to it, so one library works
+        # both natively and inside a container that mounts the data elsewhere.
+        self.media_root = Path(media_root if media_root is not None else config.DATA).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.root / "library.sqlite3", timeout=30)
+        self.db = sqlite3.connect(self.root / "library.sqlite3", timeout=30, check_same_thread=check_same_thread)
         self.db.row_factory = sqlite3.Row
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(videos)')}
         if columns and 'gallery_version' not in columns:
@@ -93,6 +96,17 @@ class Catalog:
     def close(self):
         self.db.close()
 
+    def stored_path(self, path):
+        path = Path(path).resolve()
+        try:
+            return path.relative_to(self.media_root).as_posix()
+        except ValueError:
+            return str(path)
+
+    def video_path(self, row):
+        path = Path(row['path'])
+        return path if path.is_absolute() else self.media_root / path
+
     def recover(self):
         with self.db:
             self.db.execute("UPDATE videos SET status='pending', error='Interrupted; ready to resume' WHERE status='processing'")
@@ -128,7 +142,8 @@ class Catalog:
             finally:
                 temp.unlink(missing_ok=True)
         stat = source.stat()
-        identity = hashlib.sha256(str(source).casefold().encode()).hexdigest()
+        stored = self.stored_path(source)
+        identity = hashlib.sha256(stored.casefold().encode()).hexdigest()
         with self.db:
             existing = self.db.execute("SELECT * FROM videos WHERE id=?", (identity,)).fetchone()
             if existing and (existing['size'], existing['modified']) != (stat.st_size, stat.st_mtime_ns):
@@ -137,7 +152,7 @@ class Catalog:
                 self.db.execute("UPDATE videos SET status='pending', result=NULL, gallery_version=0, error='', size=?, modified=? WHERE id=?",
                                 (stat.st_size, stat.st_mtime_ns, identity))
             self.db.execute("INSERT OR IGNORE INTO videos(id,path,name,size,modified) VALUES(?,?,?,?,?)",
-                            (identity, str(source), original_name, stat.st_size, stat.st_mtime_ns))
+                            (identity, stored, original_name, stat.st_size, stat.st_mtime_ns))
         return identity
 
     def videos(self):
@@ -168,7 +183,7 @@ class Catalog:
         row = self.db.execute("SELECT * FROM videos WHERE id=?", (identity,)).fetchone()
         if not row or row['status'] != 'ready' or not row['result']:
             return None
-        stat = Path(row['path']).stat()
+        stat = self.video_path(row).stat()
         if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
             raise ValueError("Video changed; scan/import it again before processing")
         with gzip.open(self.root / row['result'], "rt", encoding="utf-8") as stream:
@@ -221,13 +236,14 @@ class Catalog:
         import cv2
         check_cancel(cancel)
         row = self.db.execute("SELECT * FROM videos WHERE id=?", (identity,)).fetchone()
-        stat = Path(row['path']).stat()
+        video = self.video_path(row)
+        stat = video.stat()
         if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
             raise ValueError("Video changed during processing; scan it again")
         relative = Path("results") / (identity + "-" + uuid.uuid4().hex)
         folder = self.root / relative
         folder.mkdir(parents=True)
-        capture = cv2.VideoCapture(row['path'])
+        capture = cv2.VideoCapture(str(video))
         photos = []
         groups = collect_sightings(result['frames'])
         source_signature = f"{stat.st_size}:{stat.st_mtime_ns}"
@@ -292,7 +308,7 @@ class Catalog:
             with gzip.open(folder / "analysis.json.gz", "wt", encoding="utf-8") as sink:
                 json.dump(result, sink, separators=(',', ':'))
             check_cancel(cancel)
-            final_stat = Path(row['path']).stat()
+            final_stat = video.stat()
             if (final_stat.st_size, final_stat.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
                 raise ValueError('Video changed during gallery extraction; scan it again')
             with self.db:

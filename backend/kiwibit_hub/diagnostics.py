@@ -1,4 +1,4 @@
-"""Local, per-run diagnostics for the Bird Library (no model or account access)."""
+"""Per-run diagnostics: redacted activity log, crash hooks and fault stacks."""
 from __future__ import annotations
 
 import atexit
@@ -10,6 +10,8 @@ import re
 import sys
 import threading
 import time
+
+KEEP_RUNS = 20
 
 
 def redact(text):
@@ -24,86 +26,45 @@ class SafeFormatter(logging.Formatter):
         return redact(super().format(record))
 
 
-class ErrorStream:
-    """Collect complete lines so credentials split across writes are still redacted."""
-    encoding = 'utf-8'
-
-    def __init__(self, logger):
-        self.logger = logger
-        self.pending = ''
-        self.lock = threading.RLock()
-
-    def write(self, text):
-        with self.lock:
-            self.pending += text
-            while '\n' in self.pending:
-                line, self.pending = self.pending.split('\n', 1)
-                if line.strip():
-                    self.logger.warning('stderr: %s', line)
-        return len(text)
-
-    def flush(self):
-        with self.lock:
-            if self.pending:
-                self.logger.warning('stderr: %s', self.pending)
-                self.pending = ''
-
-    def isatty(self):
-        return False
-
-
 class Diagnostics:
-    def __init__(self, folder):
+    def __init__(self, folder, console=True):
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
+        self._prune(folder)
         stem = time.strftime('%Y%m%d-%H%M%S') + f'-{os.getpid()}'
         self.path = folder / f'{stem}.log'
-        self.logger = logging.getLogger('bird-library')
+        self.logger = logging.getLogger('kiwibit_hub')
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
-        handler = logging.FileHandler(self.path, encoding='utf-8')
-        handler.setFormatter(SafeFormatter('%(asctime)s %(levelname)s [%(threadName)s] %(message)s'))
-        self.logger.addHandler(handler)
-        # Keep this file open for the lifetime of the process. faulthandler writes
-        # directly to its descriptor, including when Python cannot acquire the GIL.
+        formatter = SafeFormatter('%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s')
+        handlers = [logging.FileHandler(self.path, encoding='utf-8')]
+        if console:
+            handlers.append(logging.StreamHandler(sys.stderr))
+        for handler in handlers:
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        # Kept open for the process lifetime: faulthandler writes to the raw descriptor.
         self.stacks = (folder / f'{stem}-stacks.log').open('a', encoding='utf-8', buffering=1)
         faulthandler.enable(file=self.stacks, all_threads=True)
-        self.original_stderr = sys.stderr
-        sys.stderr = ErrorStream(self.logger)
         sys.excepthook = lambda kind, value, tb: self.logger.critical(
             'Unhandled Python exception', exc_info=(kind, value, tb))
         threading.excepthook = lambda args: self.logger.critical(
             'Unhandled thread exception: %s', args.thread.name,
             exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
-        self.last_status = 0.0
-        self.logger.info('SESSION START pid=%s Python=%s executable=%s',
-                         os.getpid(), sys.version.replace('\n', ' '), sys.executable)
+        self.logger.info('SESSION START pid=%s Python=%s', os.getpid(), sys.version.replace('\n', ' '))
         atexit.register(self.on_exit)
 
-    def attach_qt(self, app):
-        from PySide6.QtCore import QTimer, qInstallMessageHandler, qVersion
-        self.qt_handler = lambda kind, context, message: self.logger.warning('Qt %s: %s', kind, message)
-        qInstallMessageHandler(self.qt_handler)
-        self.logger.info('Qt %s; UI watchdog enabled (60 seconds without a heartbeat)', qVersion())
-        self.timer = QTimer(app)
-        self.timer.timeout.connect(self.heartbeat)
-        self.timer.start(5000)
-        self.heartbeat()
-
-    def heartbeat(self):
-        faulthandler.dump_traceback_later(60, repeat=True, file=self.stacks)
-
-    def status(self, text):
-        now = time.monotonic()
-        if now - self.last_status >= 10:
-            self.logger.info('STATUS %s', text)
-            self.last_status = now
+    @staticmethod
+    def _prune(folder):
+        runs = sorted(folder.glob('*-stacks.log'))
+        for stacks in runs[:-KEEP_RUNS]:
+            stacks.unlink(missing_ok=True)
+            stacks.with_name(stacks.name.replace('-stacks.log', '.log')).unlink(missing_ok=True)
 
     def on_exit(self):
-        faulthandler.cancel_dump_traceback_later()
-        sys.stderr.flush()
         self.logger.info('PYTHON EXIT (see preceding messages for errors)')
 
 
-def install():
-    return Diagnostics(Path(__file__).resolve().parent.parent / 'bird-library' / 'diagnostics')
+def install(folder=None):
+    from . import config
+    return Diagnostics(folder or config.LOGS)

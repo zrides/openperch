@@ -12,16 +12,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from library import load_recordings
-from media_proxy import MediaProxy
+from . import config
+from .kiwibit_api import KiwibitClient, load_config
+from .media_proxy import MediaProxy
+from .recordings import load_recordings
 
-
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-# GUI callers use pythonw; console tools otherwise create a window on every run.
+# Native Windows runs would otherwise flash a console window for every ffmpeg/ffprobe call.
 BACKGROUND_PROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-sys.path.insert(0, str(ROOT / "kiwibit-analysis" / "kiwibit-viewer"))
-from kiwibit_api import KiwibitClient, load_config  # noqa: E402
 
 
 def recording_path(output, event):
@@ -187,8 +184,8 @@ def download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, timeou
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Download all Kiwibit cloud videos as local MP4 files")
-    parser.add_argument("--output", type=Path, default=ROOT / "kiwibit-downloads",
-                        help="destination folder (default: workspace/kiwibit-downloads)")
+    parser.add_argument("--output", type=Path, default=config.DOWNLOADS,
+                        help="destination folder (default: $KIWIBIT_DATA_DIR/downloads)")
     parser.add_argument("--camera", help="download only this camera serial number")
     parser.add_argument("--limit", type=int, help="download at most this many videos (useful for a trial run)")
     parser.add_argument("--dry-run", action="store_true", help="list planned files without downloading")

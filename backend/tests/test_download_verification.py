@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from test_library_jobs import cloud
-from bird_library import LibraryJob
+from kiwibit_hub.jobs import LibraryJob
 
 
 class VerificationTests(unittest.TestCase):
@@ -94,13 +94,12 @@ class VerificationTests(unittest.TestCase):
 
     def test_full_check_job_does_not_fetch_or_process(self):
         import json
-        downloads = self.root / 'kiwibit-downloads'
+        downloads = self.root / 'downloads'
         downloads.mkdir()
         (downloads / 'local.mp4').write_bytes(b'video')
         engine = Mock()
-        job = LibraryJob('verify', [], None, None, self.root / 'library', engine)
-        with patch('bird_library.ROOT', self.root), \
-             patch.object(cloud, 'KiwibitClient') as client, \
+        job = LibraryJob('verify', [], None, None, self.root / 'library', engine, downloads=downloads)
+        with patch.object(cloud, 'KiwibitClient') as client, \
              patch.object(cloud, 'probe_video', return_value=12.5):
             job.run()
             client.assert_not_called()

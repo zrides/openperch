@@ -11,9 +11,9 @@ from unittest.mock import patch, Mock
 import cv2
 import numpy as np
 
-from catalog import Catalog, NONBIRD_LABELS
-from engine import Cancelled
-from sightings import collect_sightings, summarize, photo_quality, best_photos, sighting_matches, UNCERTAIN
+from kiwibit_hub.catalog import Catalog, NONBIRD_LABELS
+from kiwibit_hub.engine import Cancelled
+from kiwibit_hub.sightings import collect_sightings, summarize, photo_quality, best_photos, sighting_matches, UNCERTAIN
 import test_catalog as fixtures
 
 
@@ -135,11 +135,11 @@ class CorrectionTests(unittest.TestCase):
         original = self.db.photos('Northern cardinal')
         self.db.correct_sighting(original[0]['sighting_id'], 'Purple finch')
         cancel = threading.Event()
-        from catalog import photo_quality as real_quality
+        from kiwibit_hub.catalog import photo_quality as real_quality
         def stop_after_crop(*args):
             cancel.set()
             return real_quality(*args)
-        with patch('catalog.photo_quality', side_effect=stop_after_crop):
+        with patch('kiwibit_hub.catalog.photo_quality', side_effect=stop_after_crop):
             with self.assertRaises(Cancelled):
                 self.db.save_analysis(identity, self.result, cancel)
         self.assertEqual([p['path'] for p in self.db.photos('Purple finch')], [p['path'] for p in original])
@@ -174,7 +174,7 @@ class CorrectionTests(unittest.TestCase):
         identity = self.db.ingest(self.video)
         self.db.save_analysis(identity, self.result, threading.Event())
         first = self.db.photos('Northern cardinal')[0]['sighting_id']
-        from catalog import photo_quality as real_quality
+        from kiwibit_hub.catalog import photo_quality as real_quality
         def edit_while_processing(*args):
             # The crop scorer now runs in a worker. Simulate a concurrent editor
             # with its own thread-local SQLite connection, as the UI uses.
@@ -184,13 +184,13 @@ class CorrectionTests(unittest.TestCase):
             finally:
                 other.close()
             return real_quality(*args)
-        with patch('catalog.photo_quality', side_effect=edit_while_processing):
+        with patch('kiwibit_hub.catalog.photo_quality', side_effect=edit_while_processing):
             self.db.save_analysis(identity, self.result, threading.Event())
         self.assertEqual(len(self.db.photos('Purple finch')), 3)
 
     def test_saved_results_upgrade_does_not_run_models(self):
-        from bird_library import LibraryJob
-        from sightings import SMART_VERSION
+        from kiwibit_hub.jobs import LibraryJob
+        from kiwibit_hub.sightings import SMART_VERSION
         identity = self.db.ingest(self.video)
         self.db.save_analysis(identity, self.result, threading.Event())
         self.db.db.execute('UPDATE videos SET gallery_version=0 WHERE id=?', (identity,))

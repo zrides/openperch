@@ -3,6 +3,8 @@ import math
 import queue
 import threading
 
+from .cancel import check_cancel
+
 SUPPORTED_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 MAX_BATCH_SIZE = max(SUPPORTED_BATCH_SIZES)
 
@@ -75,7 +77,6 @@ class VideoFrames:
             self._put(('end', None))
 
     def _get(self):
-        from engine import check_cancel
         while True:
             check_cancel(self.cancel)
             try:
@@ -88,7 +89,6 @@ class VideoFrames:
                     raise RuntimeError('Video decoder stopped without an end marker')
 
     def __enter__(self):
-        from engine import check_cancel
         check_cancel(self.cancel)
         try:
             if self.buffer_size:
@@ -108,7 +108,6 @@ class VideoFrames:
         return self
 
     def __next__(self):
-        from engine import check_cancel
         if self.finished:
             raise StopIteration
         check_cancel(self.cancel)

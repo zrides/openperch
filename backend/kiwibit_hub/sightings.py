@@ -6,7 +6,7 @@ bird recognition. Raw frame predictions are always retained separately.
 from collections import defaultdict
 import math
 
-from engine import iou
+from .engine import iou
 
 SMART_VERSION = 3
 UNCERTAIN = 'Uncertain bird'

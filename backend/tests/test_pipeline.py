@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from engine import Engine, Cancelled
-from video_pipeline import VideoFrames
-from bird_library import LibraryJob
+from kiwibit_hub.engine import Engine, Cancelled
+from kiwibit_hub.video_pipeline import VideoFrames
+from kiwibit_hub.jobs import LibraryJob
 import test_catalog as fixtures
 
 
@@ -109,7 +109,7 @@ class VideoPipelineTests(unittest.TestCase):
                 counter += len(crops)
                 return ranked
             engine.classify = classify
-            with patch('engine.write_cache'):
+            with patch('kiwibit_hub.engine.write_cache'):
                 results.append(engine.analyze(self.video, self.root, ['bird', 'squirrel'],
                     lambda _: None, lambda *_: None, threading.Event(), force=True))
         for result in results[1:]:

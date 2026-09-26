@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from engine import animals_at, cache_key, read_labels
+from kiwibit_hub.engine import animals_at, cache_key, read_labels
 
 
 class PlayerLogicTests(unittest.TestCase):

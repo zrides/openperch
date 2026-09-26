@@ -1,16 +1,13 @@
-import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from catalog import Catalog, ROOT
-from bird_library import LibraryJob
-from engine import Cancelled
-
-sys.path.insert(0, str(ROOT / 'kiwibit-desktop'))
-import download_cloud_videos as cloud
+from kiwibit_hub import downloader as cloud
+from kiwibit_hub.catalog import Catalog
+from kiwibit_hub.jobs import LibraryJob
+from kiwibit_hub.engine import Cancelled
 
 
 class FetchTests(unittest.TestCase):

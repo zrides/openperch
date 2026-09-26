@@ -1,22 +1,20 @@
-import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from diagnostics import redact
+from kiwibit_hub.diagnostics import redact
 
 
 class DiagnosticTests(unittest.TestCase):
     def run_child(self, body):
         with tempfile.TemporaryDirectory() as folder:
-            code = ('from diagnostics import Diagnostics\n'
+            code = ('from kiwibit_hub.diagnostics import Diagnostics\n'
                     'import sys\n'
-                    'd = Diagnostics(sys.argv[1])\n' + body)
+                    'd = Diagnostics(sys.argv[1], console=False)\n' + body)
             result = subprocess.run([sys.executable, '-c', code, folder],
-                                    cwd=Path(__file__).resolve().parent,
-                                    env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'},
+                                    cwd=Path(__file__).resolve().parent.parent,
                                     capture_output=True, text=True, timeout=20)
             logs = {p.name: p.read_text(encoding='utf-8') for p in Path(folder).glob('*.log')}
             return result, logs
@@ -40,16 +38,6 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(any('Unhandled thread exception' in text for text in logs.values()))
         self.assertTrue(any('Timeout' in text and '<module>' in text
                             for name, text in logs.items() if name.endswith('-stacks.log')))
-
-    def test_qt_messages_and_clean_exit(self):
-        result, logs = self.run_child(
-            'from PySide6.QtWidgets import QApplication\n'
-            'from PySide6.QtCore import QTimer, qWarning\n'
-            'app = QApplication([])\nd.attach_qt(app)\n'
-            'qWarning("diagnostic-qt-test")\n'
-            'QTimer.singleShot(50, app.quit)\napp.exec()\n')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(any('diagnostic-qt-test' in text and 'PYTHON EXIT' in text for text in logs.values()))
 
     def test_redact_token_fields(self):
         self.assertNotIn('sensitive', redact('"access_token": "sensitive"'))

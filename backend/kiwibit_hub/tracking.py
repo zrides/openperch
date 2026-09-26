@@ -241,7 +241,7 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
     An optional video supplies color descriptors for legacy analyses. Original
     boxes, rankings and prior IDs remain available; missing detections are not made up.
     """
-    from engine import check_cancel
+    from .cancel import check_cancel
     if cancel is not None:
         check_cancel(cancel)
     if result.get('tracker_version') == TRACKER_VERSION:

@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from catalog import Catalog, discover, gallery_species
-from engine import Cancelled
+from kiwibit_hub.catalog import Catalog, discover, gallery_species
+from kiwibit_hub.engine import Cancelled
 
 
 class CatalogTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class CatalogTests(unittest.TestCase):
         second = self.db.ingest(self.video, copy=True)
         self.assertEqual(first, second)
         self.assertEqual(len(self.db.videos()), 1)
-        retained = Path(self.db.videos()[0]['path'])
+        retained = self.db.video_path(self.db.videos()[0])
         self.assertNotEqual(retained, self.video)
         self.assertEqual(retained.read_bytes(), original)
         self.assertEqual(self.video.read_bytes(), original)
