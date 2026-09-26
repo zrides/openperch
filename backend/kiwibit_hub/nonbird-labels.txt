@@ -1,0 +1,66 @@
+Eastern gray squirrel
+Fox squirrel
+American red squirrel
+Eurasian red squirrel
+Southern flying squirrel
+Eastern chipmunk
+Least chipmunk
+Ground squirrel
+Raccoon
+Virginia opossum
+Eastern cottontail rabbit
+Snowshoe hare
+Domestic rabbit
+White-tailed deer
+Mule deer
+Red fox
+Gray fox
+Coyote
+American black bear
+Brown bear
+Striped skunk
+Groundhog
+Deer mouse
+House mouse
+Brown rat
+Vole
+Domestic cat
+Domestic dog
+Horse
+Cow
+Sheep
+Goat
+Pig
+Donkey
+Llama
+Alpaca
+Elephant
+Giraffe
+Zebra
+Lion
+Tiger
+Leopard
+Cheetah
+Gray wolf
+Moose
+Elk
+Bison
+Beaver
+River otter
+Porcupine
+Hedgehog
+Raccoon dog
+Bat
+Lizard
+Snake
+Turtle
+Frog
+Toad
+Butterfly
+Moth
+Honey bee
+Bumblebee
+Wasp
+Dragonfly
+Beetle
+Spider
