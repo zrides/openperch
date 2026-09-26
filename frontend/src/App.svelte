@@ -5,13 +5,13 @@
   import Login from './pages/Login.svelte';
   import Recordings from './pages/Recordings.svelte';
   import Birds from './pages/Birds.svelte';
+  import Home from './pages/Home.svelte';
   import ComingSoon from './pages/ComingSoon.svelte';
 
   const pages: Record<string, { title: string; summary: string }> = {
-    home: { title: 'Home', summary: "Today's visitors, top species and busiest hours from your library." },
     camera: { title: 'Camera', summary: 'Camera status, motion and recording settings, activity zone and notifications.' },
   };
-  const BUILT = ['live', 'recordings', 'birds'];
+  const BUILT = ['home', 'live', 'recordings', 'birds'];
 
   // #/<page>[/<id>][?t=<ms>]
   function parse() {
@@ -19,7 +19,7 @@
     const [page, id = null] = path.split('/');
     const known = BUILT.includes(page) || page in pages;
     return {
-      route: known ? page : 'live',
+      route: known ? page : 'home',
       id: known && id ? decodeURIComponent(id) : null,
       startMs: Number(new URLSearchParams(search).get('t')) || 0,
     };
@@ -43,7 +43,9 @@
 <div class="shell">
   <Nav {route} />
   <main>
-    {#if route === 'live'}
+    {#if route === 'home'}
+      <Home />
+    {:else if route === 'live'}
       <Live />
     {:else if route === 'recordings'}
       <Recordings id={current.id} startMs={current.startMs} />

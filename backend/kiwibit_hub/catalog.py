@@ -176,6 +176,12 @@ class Catalog:
             species.setdefault(video_id, []).append(name)
         return species
 
+    def covers(self):
+        """The best-quality photo of each video, for thumbnails."""
+        # SQLite returns the row holding max(quality) for bare columns.
+        return {video_id: path for video_id, path, _ in self.db.execute(
+            'SELECT video_id, path, max(quality) FROM photos GROUP BY video_id')}
+
     def state(self, identity, status, error=""):
         with self.db:
             self.db.execute("UPDATE videos SET status=?,error=? WHERE id=?", (status, error, identity))

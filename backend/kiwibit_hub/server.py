@@ -251,10 +251,11 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def recordings(q: str = '', limit: int = 0, db: Catalog = Depends(catalog)):
         text = q.casefold()
         species = db.video_species()
+        covers = db.covers()
         lengths = durations()
         rows = [{**{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size')},
                  'recorded_at': recorded_at(row['name']), 'species': species.get(row['id'], []),
-                 'duration': lengths.get(row['path'])}
+                 'duration': lengths.get(row['path']), 'cover': covers.get(row['id'])}
                 for row in db.videos() if text in (row['name'] + ' ' + row['status']).casefold()]
         # Newest recording first; imported files without a timestamp go last.
         rows.sort(key=lambda row: row['recorded_at'] or '', reverse=True)

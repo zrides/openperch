@@ -69,6 +69,8 @@ export interface Recording {
   recorded_at: string | null;
   species: string[];
   duration: number | null;
+  /** Best photo of the recording (results path), if any. */
+  cover: string | null;
 }
 
 export interface Evidence {

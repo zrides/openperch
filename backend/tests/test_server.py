@@ -152,6 +152,8 @@ class ServerTests(unittest.TestCase):
         row = self.client.get('/api/recordings').json()[0]
         self.assertEqual(row['duration'], 2.1)
         self.assertEqual(row['species'], ['Northern cardinal'])
+        self.assertTrue(row['cover'].endswith('.jpg'))
+        self.assertEqual(self.client.get(f"/api/photos/{row['cover']}").status_code, 200)
         sightings = self.client.get(f'/api/recordings/{self.identity}/sightings').json()
         self.assertEqual(len(sightings), 1)
         sighting = sightings[0]
