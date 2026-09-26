@@ -2,14 +2,21 @@ name: kiwibit-hub
 
 services:
   hub:
-    build: ./backend
+    build: .
     image: kiwibit-hub:dev
     ports:
       # Localhost only by default. Set KIWIBIT_HUB_BIND=0.0.0.0 in .env to reach it from your phone.
       - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_HUB_PORT:-8765}:8000"
+      # Live video to browsers (WebRTC). Host and container port must match:
+      # browsers are told to connect to this exact port.
+      - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_LIVE_UDP_PORT:-8766}:${KIWIBIT_LIVE_UDP_PORT:-8766}/udp"
     environment:
       KIWIBIT_HUB_USER: ${KIWIBIT_HUB_USER:-kiwibit}
       KIWIBIT_HUB_PASSWORD: ${KIWIBIT_HUB_PASSWORD:?Set KIWIBIT_HUB_PASSWORD in .env}
+      KIWIBIT_LIVE_UDP_PORT: ${KIWIBIT_LIVE_UDP_PORT:-8766}
+      # Addresses browsers use to reach this machine: 127.0.0.1 for this PC,
+      # plus its LAN address (e.g. 192.168.1.20) for phones on the network.
+      KIWIBIT_LIVE_HOSTS: ${KIWIBIT_LIVE_HOSTS:-127.0.0.1}
     volumes:
       - ${KIWIBIT_DATA_DIR:-./data}:/data
       - ${KIWIBIT_BIOCLIP_DIR:-../bioclip-2.5-vith14}:/models/bioclip:ro

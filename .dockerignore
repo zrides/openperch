@@ -1,0 +1,13 @@
+# Keep the build context small: runtime data, secrets and local tooling stay out.
+data/
+secrets/
+.env
+.env.*
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/*.egg-info/
+frontend/dist/
+backend/tests/
+live/kiwibit-*
+.git/
