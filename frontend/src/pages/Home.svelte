@@ -124,8 +124,9 @@
 
   function chipsFor(r: Recording) {
     if (r.status !== 'ready') return [{ text: r.status === 'failed' ? 'Processing failed' : 'Not processed yet', kind: 'plain' }];
-    if (!r.species.length) return [{ text: 'No birds detected', kind: 'plain' }];
-    return r.species.slice(0, 3).map((name) => ({ text: name, kind: name === UNCERTAIN ? 'warn' : 'ok' }));
+    const animals = r.animals.map((text) => ({ text, kind: 'animal' }));
+    if (!r.species.length) return animals.length ? animals : [{ text: 'No birds detected', kind: 'plain' }];
+    return [...r.species.slice(0, 3).map((name) => ({ text: name, kind: name === UNCERTAIN ? 'warn' : 'ok' })), ...animals];
   }
 </script>
 
@@ -194,7 +195,7 @@
             </span>
             <span class="chips">
               {#each chipsFor(r) as chip (chip.text)}
-                <span class="chip" class:chip-warn={chip.kind === 'warn'} class:chip-plain={chip.kind === 'plain'}>{chip.text}</span>
+                <span class="chip" class:chip-warn={chip.kind === 'warn'} class:chip-plain={chip.kind === 'plain'} class:chip-animal={chip.kind === 'animal'}>{chip.text}</span>
               {/each}
             </span>
           </a>

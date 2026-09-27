@@ -77,7 +77,7 @@
     if (filter === 'unprocessed' && r.status === 'ready') return false;
     const text = query.trim().toLowerCase();
     if (!text) return true;
-    const haystack = [r.name, r.status, ...r.species, dayLabel(r.recorded_at), timeOfDay(r.recorded_at),
+    const haystack = [r.name, r.status, ...r.species, ...r.animals, dayLabel(r.recorded_at), timeOfDay(r.recorded_at),
       r.recorded_at ? new Date(r.recorded_at).toLocaleDateString([], { day: 'numeric', month: 'long' }) : '']
       .join(' ').toLowerCase();
     return text.split(/\s+/).every((word) => haystack.includes(word));
@@ -133,12 +133,13 @@
   function chips(r: Recording) {
     if (r.status === 'failed') return [{ text: 'Processing failed', kind: 'error' }];
     if (r.status !== 'ready') return [{ text: r.status === 'processing' ? 'Processing…' : 'Not processed', kind: 'plain' }];
-    if (!r.species.length) return [{ text: 'No birds detected', kind: 'plain' }];
+    const animals = r.animals.map((text) => ({ text, kind: 'animal' }));
+    if (!r.species.length) return animals.length ? animals : [{ text: 'No birds detected', kind: 'plain' }];
     const names = identified(r);
     const result = names.slice(0, 2).map((text) => ({ text, kind: 'ok' }));
     if (names.length > 2) result.push({ text: `+${names.length - 2}`, kind: 'ok' });
     if (r.species.includes(UNCERTAIN)) result.push({ text: names.length ? 'Uncertain' : UNCERTAIN, kind: 'warn' });
-    return result;
+    return [...result, ...animals];
   }
 </script>
 
@@ -186,7 +187,7 @@
             </span>
             <span class="chips">
               {#each chips(r) as chip (chip.text)}
-                <span class="chip" class:chip-warn={chip.kind === 'warn'} class:chip-plain={chip.kind === 'plain'} class:chip-error={chip.kind === 'error'}>{chip.text}</span>
+                <span class="chip" class:chip-warn={chip.kind === 'warn'} class:chip-plain={chip.kind === 'plain'} class:chip-error={chip.kind === 'error'} class:chip-animal={chip.kind === 'animal'}>{chip.text}</span>
               {/each}
             </span>
           </a>
@@ -258,7 +259,7 @@
   .when { font-size: 15px; font-weight: 500; }
   .small { font-size: 13px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .item[aria-current='true'] .chip:not(.chip-warn):not(.chip-plain):not(.chip-error) { background: var(--card); }
+  .item[aria-current='true'] .chip:not(.chip-warn):not(.chip-plain):not(.chip-error):not(.chip-animal) { background: var(--card); }
   :global(.chip-error) { background: #F7E1DA !important; color: #7A2A18 !important; }
   .more { margin: 8px; }
   .empty { padding: 12px; margin: 0; }

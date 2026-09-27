@@ -62,6 +62,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .chip-warn { background: var(--warn-bg); color: var(--warn-ink); }
 .chip-plain { background: #ECE8DD; color: #4A514C; }
+.chip-animal { background: #EFE3D3; color: #6A4524; }
 .chip-live { background: var(--ember); color: #FFFFFF; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 

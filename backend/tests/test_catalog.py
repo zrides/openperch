@@ -122,6 +122,42 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(self.db.species(), [])
         self.assertEqual(self.db.videos()[0]['status'], 'ready')
 
+    def squirrel_result(self, views):
+        squirrel = {'id': 2, 'category': 'bear', 'box': [.1, .1, .9, .9],
+                    'ranked': [{'label': 'Eastern gray squirrel', 'similarity': .5}]}
+        for frame in self.result['frames'][:views]:
+            frame['animals'].append(dict(squirrel))
+        return self.result
+
+    def test_squirrels_tag_the_recording(self):
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.squirrel_result(3), threading.Event())
+        self.assertEqual(self.db.video_animals(), {identity: ['Squirrel']})
+        self.assertEqual(self.db.species()[0]['species'], 'Northern cardinal')
+
+    def test_a_brief_squirrel_box_tags_nothing(self):
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.squirrel_result(2), threading.Event())
+        self.assertEqual(self.db.video_animals(), {})
+
+    def test_bird_sighting_read_as_a_squirrel_tags_the_recording(self):
+        identity = self.db.ingest(self.video)
+        for frame in self.result['frames']:
+            frame['animals'][0]['ranked'] = [{'label': 'Eastern gray squirrel', 'similarity': .5}]
+        self.db.save_analysis(identity, self.result, threading.Event())
+        self.assertEqual(self.db.sightings(identity)[0]['ai_species'], 'Uncertain bird')
+        self.assertEqual(self.db.video_animals(), {identity: ['Squirrel']})
+        self.db.correct_sighting(self.db.sightings(identity)[0]['id'], 'Northern cardinal')
+        self.assertEqual(self.db.video_animals(), {})
+
+    def test_analyses_saved_before_tagging_are_tagged_on_upgrade(self):
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.squirrel_result(3), threading.Event())
+        self.db.db.execute('ALTER TABLE videos DROP COLUMN animals')
+        self.db.close()
+        self.db = Catalog(self.root / 'library')
+        self.assertEqual(self.db.video_animals(), {identity: ['Squirrel']})
+
     def test_conflicting_animal_prediction_is_not_named_as_bird_species(self):
         self.assertEqual(gallery_species('Bison'), 'Uncertain bird (non-bird prediction)')
         self.assertEqual(gallery_species('Northern cardinal'), 'Northern cardinal')

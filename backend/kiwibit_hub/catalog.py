@@ -14,7 +14,8 @@ from pathlib import Path
 
 from . import config
 from .cancel import Cancelled, check_cancel
-from .sightings import SMART_VERSION, collect_sightings, photo_quality, summarize, best_photos, sighting_matches
+from .sightings import (SMART_VERSION, UNCERTAIN, animal_tag, best_photos, collect_sightings, other_animals,
+                        photo_quality, sighting_matches, summarize)
 from .tracking import NONBIRD_LABELS
 
 LIBRARY = config.LIBRARY
@@ -96,8 +97,13 @@ class Catalog:
                 stratum TEXT NOT NULL, verdict TEXT, answer TEXT, answered TEXT);
         """)
         with self.db:
-            if 'gallery_version' not in {r[1] for r in self.db.execute('PRAGMA table_info(videos)')}:
+            video_columns = {r[1] for r in self.db.execute('PRAGMA table_info(videos)')}
+            if 'gallery_version' not in video_columns:
                 self.db.execute('ALTER TABLE videos ADD COLUMN gallery_version INTEGER NOT NULL DEFAULT 0')
+            if 'animals' not in video_columns:
+                # Other animals seen (JSON list of tags); NULL until the analysis is read.
+                self.db.execute('ALTER TABLE videos ADD COLUMN animals TEXT')
+                self._tag_animals()
             photo_columns = {r[1] for r in self.db.execute('PRAGMA table_info(photos)')}
             for name, declaration in [('sighting_id', 'TEXT'), ('quality', 'REAL NOT NULL DEFAULT 0'),
                                       ('featured', 'INTEGER NOT NULL DEFAULT 1')]:
@@ -105,6 +111,16 @@ class Catalog:
                     self.db.execute(f'ALTER TABLE photos ADD COLUMN {name} {declaration}')
             # Each sighting's best photo; without it every lookup scans all photos.
             self.db.execute('CREATE INDEX IF NOT EXISTS photos_sighting ON photos(sighting_id, quality)')
+
+    def _tag_animals(self):
+        """Tag analyses saved before other animals were tagged (a one-time read of each)."""
+        for row in self.db.execute("SELECT id, result FROM videos WHERE status='ready' AND result IS NOT NULL").fetchall():
+            try:
+                with gzip.open(self.root / row['result'], 'rt', encoding='utf-8') as stream:
+                    animals = other_animals(json.load(stream)['frames'])
+            except (OSError, ValueError, KeyError):
+                continue
+            self.db.execute('UPDATE videos SET animals=? WHERE id=?', (json.dumps(animals), row['id']))
 
     def close(self):
         self.db.close()
@@ -162,7 +178,7 @@ class Catalog:
             if existing and (existing['size'], existing['modified']) != (stat.st_size, stat.st_mtime_ns):
                 self.db.execute("DELETE FROM photos WHERE video_id=?", (identity,))
                 self.db.execute('UPDATE sightings SET active=0 WHERE video_id=?', (identity,))
-                self.db.execute("UPDATE videos SET status='pending', result=NULL, gallery_version=0, error='', size=?, modified=? WHERE id=?",
+                self.db.execute("UPDATE videos SET status='pending', result=NULL, gallery_version=0, animals=NULL, error='', size=?, modified=? WHERE id=?",
                                 (stat.st_size, stat.st_mtime_ns, identity))
             self.db.execute("INSERT OR IGNORE INTO videos(id,path,name,size,modified) VALUES(?,?,?,?,?)",
                             (identity, stored, original_name, stat.st_size, stat.st_mtime_ns))
@@ -183,6 +199,21 @@ class Catalog:
                 'SELECT video_id, species, count(*) AS n FROM photos GROUP BY video_id, species ORDER BY n DESC'):
             species.setdefault(video_id, []).append(name)
         return species
+
+    def video_animals(self):
+        """Other animals tagged in each video: from the analysis, and from sightings that are one."""
+        animals = {row['id']: set(json.loads(row['animals']))
+                   for row in self.db.execute('SELECT id, animals FROM videos WHERE animals IS NOT NULL')}
+        # A bird sighting the species model read as an animal is shown as uncertain; a
+        # correction to an animal's name counts too.
+        for row in self.db.execute('''SELECT s.video_id, s.ai_species, s.evidence, c.label FROM sightings s
+                LEFT JOIN corrections c ON c.sighting_id=s.id WHERE s.active=1'''):
+            label = row['label'] or (json.loads(row['evidence']).get('suggestion', '')
+                                     if row['ai_species'] == UNCERTAIN else '')
+            tag = animal_tag(label)
+            if tag:
+                animals.setdefault(row['video_id'], set()).add(tag)
+        return {video_id: sorted(tags) for video_id, tags in animals.items() if tags}
 
     def covers(self):
         """The best-quality photo of each video, for thumbnails."""
@@ -374,8 +405,9 @@ class Catalog:
                 # have received a user edit while crop extraction was in progress.
                 self.db.execute('''UPDATE photos SET species=(SELECT label FROM corrections WHERE sighting_id=photos.sighting_id)
                     WHERE video_id=? AND sighting_id IN (SELECT sighting_id FROM corrections)''', (identity,))
-                self.db.execute("UPDATE videos SET status='ready',error='',result=?,gallery_version=? WHERE id=?",
-                                (str(relative / "analysis.json.gz"), SMART_VERSION, identity))
+                self.db.execute("UPDATE videos SET status='ready',error='',result=?,gallery_version=?,animals=? WHERE id=?",
+                                (str(relative / "analysis.json.gz"), SMART_VERSION,
+                                 json.dumps(other_animals(result['frames'])), identity))
             committed = True
         finally:
             capture.release()

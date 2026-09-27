@@ -330,7 +330,7 @@
       <h2 id="recent-title" class="serif">Recent visits</h2>
       {#each recent as recording (recording.id)}
         <div class="visit">
-          <span class="visit-name">{recording.species[0] ?? (recording.status === 'ready' ? 'No birds identified' : 'Not processed yet')}</span>
+          <span class="visit-name">{recording.species[0] ?? recording.animals[0] ?? (recording.status === 'ready' ? 'No birds identified' : 'Not processed yet')}</span>
           <span class="mono muted small">{when(recording)}</span>
         </div>
       {:else}

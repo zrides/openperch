@@ -74,6 +74,8 @@ export interface Recording {
   photos: number;
   recorded_at: string | null;
   species: string[];
+  /** Other animals seen, such as "Squirrel". */
+  animals: string[];
   duration: number | null;
   /** Best photo of the recording (results path), if any. */
   cover: string | null;

@@ -15,6 +15,32 @@ UNCERTAIN = 'Uncertain bird'
 VIEW_GAP_MS = 500
 # Gallery photos are saved from views at least this far apart; closer ones are near duplicates.
 PHOTO_GAP_MS = 1000
+# Other animals a recording is tagged with: a word in the species model's name, and its tag.
+# The detector's own labels are no use here (it calls squirrel close-ups bears and elephants).
+ANIMAL_TAGS = {'squirrel': 'Squirrel'}
+# Classified views (one per 500 ms) a non-bird track needs, so one stray box tags nothing.
+ANIMAL_MIN_VIEWS = 3
+
+
+def animal_tag(label):
+    """The tag for a species-model name, or None when it is not a tagged animal."""
+    lowered = label.casefold()
+    return next((tag for word, tag in ANIMAL_TAGS.items() if word in lowered), None)
+
+
+def other_animals(frames):
+    """Tags for the non-bird animals in an analysis, from the species model's reading of each track."""
+    scores = defaultdict(lambda: defaultdict(float))
+    views = defaultdict(int)
+    for frame in frames:
+        for animal in frame['animals']:
+            if animal['category'] == 'bird' or not animal.get('ranked'):
+                continue
+            views[animal['id']] += 1
+            for rank in animal['ranked']:
+                scores[animal['id']][rank['label']] += rank['similarity']
+    tags = {animal_tag(max(track, key=track.get)) for key, track in scores.items() if views[key] >= ANIMAL_MIN_VIEWS}
+    return sorted(tags - {None})
 
 
 def collect_sightings(frames):
