@@ -75,14 +75,17 @@ class LibraryJob:
                 rows = [row for row in db.videos() if row['status'] == 'ready' and row['gallery_version'] < SMART_VERSION]
                 for index, row in enumerate(rows):
                     check_cancel(self.cancel)
-                    self.message(f"Improving saved results {index+1}/{len(rows)} · {row['name']}")
+                    prefix = f"Improving saved results {index+1}/{len(rows)} · {row['name']}"
+                    self.message(prefix)
                     try:
                         result = db.result(row['id'], annotated=False)
                         if labels:
                             # Before re-tracking: joining tracks and bird-or-not both use the rankings.
                             result = restrict_rankings(result, labels)
                         from .tracking import retrack_result
-                        result = retrack_result(result, self.cancel, db.video_path(row), self.message, self.progress)
+                        # Progress counts recordings; a recording's own frames would make it jump around.
+                        result = retrack_result(result, self.cancel, db.video_path(row),
+                                                lambda text: self.message(f'{prefix} · {text}'))
                         db.save_analysis(row['id'], result, self.cancel)
                     except Cancelled:
                         raise

@@ -219,9 +219,14 @@ class CorrectionTests(unittest.TestCase):
         self.db.db.execute('UPDATE videos SET gallery_version=0 WHERE id=?', (identity,))
         self.db.db.commit()
         engine = Mock()
-        job = LibraryJob('upgrade', [], None, None, self.db.root, engine)
+        events = []
+        job = LibraryJob('upgrade', [], None, None, self.db.root, engine, lambda kind, **data: events.append((kind, data)))
         job.run()
         engine.analyze.assert_not_called()
+        # Progress and messages count recordings, not the frames inside one.
+        self.assertEqual([data for kind, data in events if kind == 'progress'], [{'value': 1, 'total': 1}])
+        self.assertTrue(all(data['text'].startswith(('Improving saved results 1/1', 'Saved results improved'))
+                            for kind, data in events if kind == 'message'))
         self.assertEqual(self.db.videos()[0]['gallery_version'], SMART_VERSION)
         self.assertEqual(self.db.videos()[0]['status'], 'ready')
 
