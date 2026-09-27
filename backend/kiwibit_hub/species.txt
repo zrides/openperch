@@ -35,6 +35,7 @@ Mourning dove
 Rock pigeon
 European starling
 Common grackle
+Boat-tailed grackle
 Red-winged blackbird
 Rusty blackbird
 Brown-headed cowbird
@@ -56,6 +57,7 @@ Pileated woodpecker
 Northern flicker
 Yellow-bellied sapsucker
 Ruby-throated hummingbird
+Rufous hummingbird
 Baltimore oriole
 Orchard oriole
 Scarlet tanager
@@ -105,6 +107,7 @@ White-tailed deer
 Red fox
 Gray fox
 Coyote
+American black bear
 Striped skunk
 Groundhog
 Deer mouse
