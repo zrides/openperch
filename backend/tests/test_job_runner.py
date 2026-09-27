@@ -1,12 +1,15 @@
 import queue
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from kiwibit_hub import downloader as cloud
 from kiwibit_hub.catalog import Catalog
+from kiwibit_hub.engine import Engine
 from kiwibit_hub.jobs import JobRunner, LibraryJob
 from kiwibit_hub.video_pipeline import VideoFrames
 
@@ -107,6 +110,65 @@ class DecoderRaceTests(unittest.TestCase):
         frames.thread.join()
         with self.assertRaisesRegex(RuntimeError, 'without an end marker'):
             frames._get()
+
+
+
+class GpuMemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / 'downloads').mkdir()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def runner(self, idle_seconds):
+        runner = JobRunner(self.root / 'library', self.root / 'downloads', self.root, idle_seconds=idle_seconds)
+        runner.engine = Mock()
+        runner.engine.release.return_value = True
+        self.addCleanup(runner.shutdown, 5)
+        return runner
+
+    @staticmethod
+    def eventually(condition, timeout=3):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not condition():
+            time.sleep(.01)
+        return condition()
+
+    def test_models_are_freed_after_the_idle_time(self):
+        runner = self.runner(.05)
+        runner.start('scan')
+        runner.thread.join(5)
+        self.assertTrue(self.eventually(lambda: runner.engine.release.called))
+        runner.engine.release.assert_called_once()
+
+    def test_a_job_within_the_idle_time_keeps_the_models_loaded(self):
+        runner = self.runner(.4)
+        for _ in range(2):
+            runner.start('scan')
+            runner.thread.join(5)
+        time.sleep(.2)
+        runner.engine.release.assert_not_called()
+        self.assertTrue(self.eventually(lambda: runner.engine.release.called))
+        runner.engine.release.assert_called_once()
+
+    def test_models_are_never_freed_while_a_job_runs(self):
+        runner = self.runner(60)
+        runner.state['running'] = True
+        runner._release_if_idle()
+        runner.engine.release.assert_not_called()
+
+    def test_release_drops_the_models_so_the_next_analysis_reloads_them(self):
+        engine = Engine()
+        engine.model, engine.detector, engine.model_identity, engine.labels = object(), object(), ('weights',), ['bird']
+        torch = Mock()
+        torch.cuda.is_available.return_value = True
+        with patch.dict(sys.modules, {'torch': torch}):
+            self.assertTrue(engine.release())
+            self.assertFalse(engine.release())
+        torch.cuda.empty_cache.assert_called_once()
+        self.assertEqual((engine.model, engine.detector, engine.model_identity, engine.labels), (None, None, None, None))
 
 
 if __name__ == '__main__':

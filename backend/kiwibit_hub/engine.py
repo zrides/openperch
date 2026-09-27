@@ -144,6 +144,19 @@ class Engine:
         self.detector_batches = []
         self.classification_batches = []
 
+    def release(self):
+        """Free the models' GPU memory; the next analysis loads them again (about 20 s)."""
+        if self.model is None and self.detector is None:
+            return False
+        self.model = self.preprocess = self.detector = self.tokenizer = self.text_features = None
+        self.model_identity = self.labels = None
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return True
+
     @staticmethod
     def _cuda_oom(exc):
         import torch

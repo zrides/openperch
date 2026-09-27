@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -22,6 +23,8 @@ from .sightings import SMART_VERSION
 
 log = logging.getLogger('kiwibit_hub.jobs')
 
+# Free the models' GPU memory after this long without a job. Back-to-back jobs keep them loaded.
+GPU_IDLE_SECONDS = float(os.environ.get('KIWIBIT_GPU_IDLE_SECONDS', 300))
 ACTIONS = ('scan', 'import', 'process', 'selected', 'reanalyze', 'reanalyze_all', 'fetch', 'verify', 'upgrade')
 
 
@@ -284,8 +287,10 @@ class LibraryJob:
 class JobRunner:
     """Owns the one GPU engine and runs at most one library job at a time."""
 
-    def __init__(self, root=None, downloads=None, media_root=None, model=None, labels=None):
+    def __init__(self, root=None, downloads=None, media_root=None, model=None, labels=None, idle_seconds=None):
         self.root = Path(root) if root is not None else config.LIBRARY
+        self.idle_seconds = GPU_IDLE_SECONDS if idle_seconds is None else idle_seconds
+        self.idle_timer = None
         self.downloads = downloads
         self.media_root = media_root
         self.model = Path(model) if model is not None else config.BIOCLIP
@@ -358,6 +363,8 @@ class JobRunner:
                 raise RuntimeError('Another library job is running')
             self.job = LibraryJob(action, list(ids), self.model, self.labels, self.root, self.engine,
                                   self._publish, self.downloads, self.media_root)
+            if self.idle_timer is not None:
+                self.idle_timer.cancel()
             self.state = {'action': action, 'running': True, 'message': 'Starting…', 'value': 0, 'total': 0}
             self._publish('state', **self.state)
             self.thread = threading.Thread(target=self._run, args=(self.job,), name=f'job-{action}', daemon=True)
@@ -367,8 +374,18 @@ class JobRunner:
         try:
             job.run()
         finally:
-            self.state['running'] = False
+            with self.lock:
+                self.state['running'] = False
+                self.idle_timer = threading.Timer(self.idle_seconds, self._release_if_idle)
+                self.idle_timer.daemon = True
+                self.idle_timer.start()
             self._publish('state', **self.state)
+
+    def _release_if_idle(self):
+        # Under the lock, so a job can't start while the models are being freed.
+        with self.lock:
+            if not self.state['running'] and self.engine.release():
+                log.info("Freed the models' GPU memory after %.0f s without a job", self.idle_seconds)
 
     def cancel(self):
         if self.job is not None:
@@ -376,6 +393,8 @@ class JobRunner:
             self.job.cancel.set()
 
     def shutdown(self, timeout=None):
+        if self.idle_timer is not None:
+            self.idle_timer.cancel()
         self.cancel()
         if self.thread is not None:
             self.thread.join(timeout)

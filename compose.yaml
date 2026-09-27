@@ -20,6 +20,8 @@ services:
       # Addresses browsers use to reach this machine: its LAN address (needed
       # by Firefox and by phones), then 127.0.0.1, e.g. 192.168.1.20,127.0.0.1
       KIWIBIT_LIVE_HOSTS: ${KIWIBIT_LIVE_HOSTS:-127.0.0.1}
+      # Seconds without a job before the AI models' GPU memory is freed (0 = right after each job).
+      KIWIBIT_GPU_IDLE_SECONDS: ${KIWIBIT_GPU_IDLE_SECONDS:-300}
     volumes:
       - ${KIWIBIT_DATA_DIR:-./data}:/data
       - ${KIWIBIT_BIOCLIP_DIR:-../bioclip-2.5-vith14}:/models/bioclip:ro

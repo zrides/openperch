@@ -178,6 +178,10 @@ the catalog, runs no models and changes nothing (about 30 seconds for 800 clips)
 
 - The server must run as a single process (`--workers 1`). It owns the GPU
   models, the job queue, the fetch schedule and the live relay.
+- The AI models hold about 4 GB of GPU memory while loaded. It is freed after
+  5 minutes without a job (`KIWIBIT_GPU_IDLE_SECONDS`); the next job reloads
+  them in about 20 seconds. The CUDA context (about 0.3 GB) stays until the
+  hub stops.
 - Species results are AI predictions. Match values are cosine similarities,
   not probabilities. Corrections relabel a sighting; they don't retrain the model.
 - Ultralytics (YOLO-World) is AGPL-3.0. Keep that in mind before distributing
