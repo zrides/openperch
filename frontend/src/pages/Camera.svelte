@@ -11,6 +11,11 @@
   let refreshing = $state(false);
   let saved = $state('');
   let recordings = $state<number | null>(null);
+  // Recordings not yet analyzed (pending or failed), and SD-card clips in the library.
+  let waiting = $state(0);
+  let card = $state<{ recordings: number; waiting: number } | null>(null);
+  let confirmAnalyze = $state(false);
+  let cardMessage = $state('');
   let confirmRerun = $state(false);
   let rerunMessage = $state('');
 
@@ -32,7 +37,37 @@
     refreshing = false;
   }
   load();
-  api.get<{ recordings: number }>('/api/status').then((status) => { recordings = status.recordings; }).catch(() => {});
+  type Status = { recordings: number; by_status: Record<string, number>; sdcard: { recordings: number; waiting: number } };
+  async function loadStatus() {
+    try {
+      const status = await api.get<Status>('/api/status');
+      recordings = status.recordings;
+      waiting = Object.entries(status.by_status).filter(([state]) => state !== 'ready').reduce((sum, [, n]) => sum + n, 0);
+      card = status.sdcard;
+    } catch {
+      /* the counts are a convenience */
+    }
+  }
+  loadStatus();
+  // Counts change as a scan or analysis runs.
+  let seenChange = hub.changed;
+  $effect(() => {
+    if (hub.changed !== seenChange) {
+      seenChange = hub.changed;
+      loadStatus();
+    }
+  });
+
+  async function startJob(action: 'scan' | 'process', started: string) {
+    cardMessage = '';
+    try {
+      await api.post('/api/jobs', { action });
+      confirmAnalyze = false;
+      cardMessage = started;
+    } catch (e) {
+      cardMessage = e instanceof ApiError && e.status === 409 ? 'Another job is running; try again when it finishes.' : (e as Error).message;
+    }
+  }
 
   async function startRerun() {
     rerunMessage = '';
@@ -200,6 +235,37 @@
         {/if}
         {#if rerunMessage}<p class="muted small" aria-live="polite">{rerunMessage}</p>{/if}
       </div>
+    </section>
+
+    <section class="card panel" aria-labelledby="sdcard-title">
+      <h2 id="sdcard-title" class="serif">SD-card footage</h2>
+      <p class="muted small">Move clips from the camera's SD card into the <span class="mono">sdcard</span> folder in the hub's
+        data folder (next to <span class="mono">library</span> and <span class="mono">downloads</span>); the card's own folders
+        are fine. Adding them only lists them. Analysis starts when you choose, never from a scheduled fetch.</p>
+      {#if card}
+        <p class="small">{card.recordings.toLocaleString()} card clips in the library · {card.waiting.toLocaleString()} not yet analyzed</p>
+      {/if}
+      <div class="rerun-actions">
+        <button type="button" class="btn" disabled={hub.job.running}
+                onclick={() => startJob('scan', 'Adding card clips. New ones appear as recordings waiting for analysis.')}>
+          Add card clips
+        </button>
+        {#if confirmAnalyze}
+          <button type="button" class="btn btn-primary" onclick={() => startJob('process', 'Started. Follow it in the progress card; Stop keeps what has finished.')}>
+            Start analyzing {waiting.toLocaleString()}
+          </button>
+          <button type="button" class="btn" onclick={() => { confirmAnalyze = false; }}>Cancel</button>
+        {:else}
+          <button type="button" class="btn" disabled={hub.job.running || waiting === 0} onclick={() => { confirmAnalyze = true; cardMessage = ''; }}>
+            Analyze waiting recordings ({waiting.toLocaleString()})…
+          </button>
+        {/if}
+      </div>
+      {#if confirmAnalyze}
+        <p class="small">Runs the detector and BioCLIP on the {waiting.toLocaleString()} recordings that haven't been analyzed yet.
+          A full SD card is hours of GPU time; the progress card shows the time left.</p>
+      {/if}
+      {#if cardMessage}<p class="muted small" aria-live="polite">{cardMessage}</p>{/if}
     </section>
 
     {#if hub.session?.auth_required}

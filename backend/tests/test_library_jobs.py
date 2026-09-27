@@ -89,6 +89,37 @@ class FetchTests(unittest.TestCase):
         self.assertEqual([remaining(20), remaining(600), remaining(125*60)],
                          ['under a minute', 'about 10 min', 'about 2 h 05 min'])
 
+    def test_scan_adds_sd_card_clips_but_only_process_analyzes_them(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            labels = root / 'labels.txt'
+            labels.write_text('bird\nsquirrel')
+            (root / 'downloads').mkdir()
+            (root / 'downloads' / 'cloud.mp4').write_bytes(b'cloud')
+            day = root / 'sdcard' / 'DCIM' / '2026-09-18UTC-04-00'
+            day.mkdir(parents=True)
+            (day / '2026-09-18T12-52-18PM-04-00.mp4').write_bytes(b'card')
+            (day / '2026-09-18T12-52-18PM-04-00.thumbnail.jpg').write_bytes(b'jpg')
+            db = Catalog(root / 'library', root)
+            engine = Mock()
+            engine.analyze.side_effect = RuntimeError('stop here')
+            def job(action):
+                return LibraryJob(action, [], root, labels, db.root, engine, media_root=root, downloads=root / 'downloads')
+            job('scan').run()
+            self.assertEqual(sorted(row['path'] for row in db.videos()),
+                             ['downloads/cloud.mp4', 'sdcard/DCIM/2026-09-18UTC-04-00/2026-09-18T12-52-18PM-04-00.mp4'])
+            engine.analyze.assert_not_called()
+            # A scheduled fetch never starts hours of card analysis; "process" is the deliberate start.
+            for action, expected in (('fetch', {'cloud'}), ('process', {'cloud', '2026-09-18T12-52-18PM-04-00'})):
+                engine.analyze.reset_mock()
+                for row in db.videos():
+                    db.state(row['id'], 'pending')
+                running = job(action)
+                with patch.object(running, 'fetch', return_value=0):
+                    running.run()
+                self.assertEqual({Path(call.args[0]).stem for call in engine.analyze.call_args_list}, expected, action)
+            db.close()
+
     def test_cancelled_queue_keeps_video_pending(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

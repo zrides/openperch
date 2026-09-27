@@ -12,7 +12,7 @@ This is an unofficial client built from a reverse-engineered API.
 | `frontend/` | Web UI (Svelte + TypeScript, built with Vite) |
 | `backend/` | Python package `kiwibit_hub`: API server, jobs, scheduler, AI pipeline, catalog, cloud downloader |
 | `live/` | Go WebRTC client; `cmd/relay` re-serves the camera's live stream to browsers |
-| `data/` | Runtime data, git-ignored: `library/`, `downloads/`, `cache/`, `models/`, `logs/` |
+| `data/` | Runtime data, git-ignored: `library/`, `downloads/`, `sdcard/`, `cache/`, `models/`, `logs/` |
 
 ## Pages
 
@@ -28,7 +28,13 @@ This is an unofficial client built from a reverse-engineered API.
   need review, and corrections.
 - **Camera**: the camera's status and its current settings (read-only for now,
   see below), automatic fetching, GPU batch sizes, re-analyzing every recording
-  after an AI change, sign-out.
+  after an AI change, adding SD-card footage, sign-out.
+
+To add footage from the camera's SD card, move its clips (the card's own
+`DCIM` folders are fine) into `data/sdcard`, press **Add card clips** on the
+Camera page, then **Analyze waiting recordings** when you're ready for the GPU
+run. Scheduled fetches only analyze cloud recordings, never card clips.
+Duplicates of cloud recordings are not detected yet.
 - **Check the AI**: an answer key of about 150 moments you identify by eye (the
   AI's guess stays hidden), and a score comparing the AI with your answers after
   every change. The answers only measure the AI; they are never used to train it.

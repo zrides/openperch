@@ -27,13 +27,15 @@ from .camera import CameraService
 from .catalog import Catalog
 from .downloader import read_manifest
 from .engine import read_labels
-from .jobs import JobRunner
+from .jobs import JobRunner, from_sdcard
 from .kiwibit_api import KiwibitError
 from .live import LiveError, LiveManager
 from .scheduler import FetchScheduler, run_forever
 
 # Downloaded recordings are named <UTC start>_<digest>.mp4, e.g. 20260925T185753Z_3a88a9623053ee38.mp4.
 RECORDED_AT = re.compile(r'^(\d{8}T\d{6}Z)_')
+# SD-card clips are named by local start time and UTC offset, e.g. 2026-09-18T12-52-18PM-04-00.mp4.
+CARD_RECORDED_AT = re.compile(r'^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(AM|PM)([+-]\d{2})-(\d{2})')
 CLOUD_ERRORS = (OSError, KiwibitError, ValueError, KeyError)
 
 log = logging.getLogger('kiwibit_hub.server')
@@ -120,9 +122,15 @@ class EventHub:
 
 def recorded_at(name):
     match = RECORDED_AT.match(name)
-    if not match:
-        return None
-    return datetime.strptime(match.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).isoformat()
+    if match:
+        return datetime.strptime(match.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).isoformat()
+    card = CARD_RECORDED_AT.match(name)
+    if card:
+        date, hour, minute, second, half, zone_hours, zone_minutes = card.groups()
+        hour = int(hour) % 12 + (12 if half == 'PM' else 0)
+        local = datetime.fromisoformat(f'{date}T{hour:02d}:{minute}:{second}{zone_hours}:{zone_minutes}')
+        return local.astimezone(timezone.utc).isoformat()
+    return None
 
 
 def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True,
@@ -280,7 +288,9 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         counts = {}
         for row in rows:
             counts[row['status']] = counts.get(row['status'], 0) + 1
+        card = [row for row in rows if from_sdcard(row)]
         return {'recordings': len(rows), 'by_status': counts, 'species': len(species),
+                'sdcard': {'recordings': len(card), 'waiting': sum(row['status'] != 'ready' for row in card)},
                 'photos': sum(row['photos'] for row in species),
                 'unmatched_corrections': len(db.unmatched_corrections()), 'job': runner.state}
 

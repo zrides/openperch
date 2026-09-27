@@ -220,6 +220,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status['by_status'], {'ready': 1})
         self.assertEqual(status['photos'], 3)
         self.assertFalse(status['job']['running'])
+        self.assertEqual(status['sdcard'], {'recordings': 0, 'waiting': 0})
+
+    def test_recording_times_come_from_cloud_and_sd_card_names(self):
+        from kiwibit_hub.server import recorded_at
+        self.assertEqual(recorded_at('20260925T185753Z_3a88a9623053ee38.mp4'), '2026-09-25T18:57:53+00:00')
+        # SD-card names are local time with their UTC offset.
+        self.assertEqual(recorded_at('2026-09-18T12-52-18PM-04-00.mp4'), '2026-09-18T16:52:18+00:00')
+        self.assertEqual(recorded_at('2026-05-14T06-33-57AM-04-00.mp4'), '2026-05-14T10:33:57+00:00')
+        self.assertEqual(recorded_at('2026-06-01T12-05-00AM-04-00.mp4'), '2026-06-01T04:05:00+00:00')
+        self.assertEqual(recorded_at('2026-06-01T12-05-00PM-04-00.mp4'), '2026-06-01T16:05:00+00:00')
+        self.assertIsNone(recorded_at('bird.avi'))
 
 
 if __name__ == '__main__':

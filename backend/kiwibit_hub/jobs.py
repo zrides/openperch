@@ -28,6 +28,10 @@ GPU_IDLE_SECONDS = float(os.environ.get('KIWIBIT_GPU_IDLE_SECONDS', 300))
 ACTIONS = ('scan', 'import', 'process', 'selected', 'reanalyze', 'reanalyze_all', 'fetch', 'verify', 'upgrade')
 
 
+def from_sdcard(row):
+    return row['path'].startswith(config.SDCARD_FOLDER + '/')
+
+
 def remaining(seconds):
     minutes = round(seconds/60)
     if minutes < 1:
@@ -45,6 +49,7 @@ class LibraryJob:
         self.listener = listener or (lambda kind, **data: None)
         self.downloads = Path(downloads) if downloads is not None else config.DOWNLOADS
         self.media_root = media_root
+        self.sdcard = Path(media_root if media_root is not None else config.DATA) / config.SDCARD_FOLDER
         self.cancel = threading.Event()
         self.last_failure = None
 
@@ -102,7 +107,8 @@ class LibraryJob:
             if self.action == 'fetch':
                 failures += self.fetch(db)
             elif self.action in ('import', 'scan'):
-                paths = self.paths if self.action == 'import' else discover(self.downloads) if self.downloads.is_dir() else []
+                paths = self.paths if self.action == 'import' else [
+                    path for folder in (self.downloads, self.sdcard) if folder.is_dir() for path in discover(folder)]
                 for index, path in enumerate(paths):
                     check_cancel(self.cancel)
                     self.message(f"Importing {index+1}/{len(paths)} · {Path(path).name}")
@@ -124,8 +130,9 @@ class LibraryJob:
                     rows = [row for row in db.videos() if row['status'] != 'ready']  # includes retrying failures
                 else:
                     # Fetch/import process new recordings only; a failure that repeats
-                    # must not cost GPU time on every scheduled fetch.
-                    rows = [row for row in db.videos() if row['status'] == 'pending']
+                    # must not cost GPU time on every scheduled fetch. SD-card clips wait
+                    # for "process": a card's worth is hours of GPU time, started on purpose.
+                    rows = [row for row in db.videos() if row['status'] == 'pending' and not from_sdcard(row)]
                 labels = read_labels(self.labels)
                 failures += self.process_rows(db, rows, labels)
             if failures:

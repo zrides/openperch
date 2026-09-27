@@ -3,6 +3,7 @@
 Layout under KIWIBIT_DATA_DIR (default: <repo>/data):
     library/    SQLite catalog, saved analyses, bird photos
     downloads/  cloud recordings (MP4) and download_manifest.jsonl
+    sdcard/     clips copied from the camera's SD card, added with the "scan" job
     cache/      analysis and text-feature caches
     models/     detector weights and third-party model caches
     logs/       diagnostics
@@ -24,6 +25,8 @@ def _path(name, default):
 DATA = _path('KIWIBIT_DATA_DIR', REPO / 'data')
 LIBRARY = DATA / 'library'
 DOWNLOADS = DATA / 'downloads'
+# SD-card clips live under this folder of DATA, and are cataloged relative to DATA.
+SDCARD_FOLDER = 'sdcard'
 CACHE = DATA / 'cache'
 MODELS = DATA / 'models'
 LOGS = DATA / 'logs'
