@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DayCalendar, { type DayStats } from '../lib/DayCalendar.svelte';
   import Icon from '../lib/Icon.svelte';
   import Player from '../lib/Player.svelte';
   import { api, UNCERTAIN, type Recording } from '../lib/api';
@@ -22,6 +23,26 @@
   let query = $state('');
   let filter: Filter = $state('all');
   let shownCount = $state(PAGE);
+  let day: string | null = $state(null);
+
+  // The calendar stays open unless it was closed on this device.
+  const CALENDAR_KEY = 'kiwibit.recordings.calendar';
+  let calendarOpen = $state(readCalendarOpen());
+  function readCalendarOpen(): boolean {
+    try {
+      return localStorage.getItem(CALENDAR_KEY) !== 'closed';
+    } catch {
+      return true;
+    }
+  }
+  function toggleCalendar() {
+    calendarOpen = !calendarOpen;
+    try {
+      localStorage.setItem(CALENDAR_KEY, calendarOpen ? 'open' : 'closed');
+    } catch {
+      /* storage unavailable: remember for this visit only */
+    }
+  }
 
   async function load() {
     try {
@@ -63,9 +84,10 @@
   }
 
   const filtered = $derived(recordings.filter(matches));
+  const listed = $derived(day ? filtered.filter((r) => dayKey(r.recorded_at) === day) : filtered);
   const groups = $derived.by(() => {
     const result: { key: string; label: string; items: Recording[] }[] = [];
-    for (const r of filtered.slice(0, shownCount)) {
+    for (const r of listed.slice(0, shownCount)) {
       const key = dayKey(r.recorded_at);
       let group = result[result.length - 1];
       if (!group || group.key !== key) {
@@ -76,11 +98,28 @@
     }
     return result;
   });
-  const dayCounts = $derived.by(() => {
-    const counts = new Map<string, number>();
-    for (const r of filtered) counts.set(dayKey(r.recorded_at), (counts.get(dayKey(r.recorded_at)) ?? 0) + 1);
-    return counts;
+  // Per-day totals under the current search and filter, for the calendar and the day headings.
+  const days = $derived.by(() => {
+    const result = new Map<string, DayStats>();
+    for (const r of filtered) {
+      const key = dayKey(r.recorded_at);
+      const stats = result.get(key) ?? { recordings: 0, birds: 0 };
+      stats.recordings += 1;
+      if (identified(r).length) stats.birds += 1;
+      result.set(key, stats);
+    }
+    return result;
   });
+
+  let itemsElement: HTMLDivElement | undefined = $state();
+  function pickDay(key: string | null) {
+    day = key;
+    shownCount = PAGE;
+    itemsElement?.scrollTo({ top: 0 });
+    // On a wide screen, open the day's newest recording beside the list.
+    const firstOfDay = key && filtered.find((r) => dayKey(r.recorded_at) === key);
+    if (firstOfDay && matchMedia('(min-width: 861px)').matches) location.hash = `#/recordings/${firstOfDay.id}`;
+  }
 
   // Without a selection on a wide screen, open the newest recording.
   const selected = $derived(recordings.find((r) => r.id === id) ?? null);
@@ -119,12 +158,26 @@
         {#each FILTERS as option (option.value)}
           <button type="button" aria-pressed={filter === option.value} onclick={() => { filter = option.value; shownCount = PAGE; }}>{option.label}</button>
         {/each}
+        <button type="button" class="calendar-toggle" aria-expanded={calendarOpen} aria-controls="recordings-calendar" onclick={toggleCalendar}>
+          <Icon name="calendar" size={16} />Calendar
+        </button>
       </div>
+      {#if calendarOpen}
+        <div id="recordings-calendar">
+          <DayCalendar {days} selected={day} onselect={pickDay} />
+        </div>
+      {/if}
+      {#if day}
+        <div class="day-filter">
+          <span>Showing <strong>{dayLabel(new Date(day).toISOString())}</strong></span>
+          <button type="button" onclick={() => pickDay(null)}><Icon name="close" size={16} />All days</button>
+        </div>
+      {/if}
     </div>
-    <div class="items">
+    <div class="items" bind:this={itemsElement}>
       {#if error}<p class="error">{error}</p>{/if}
       {#each groups as group (group.key)}
-        <p class="eyebrow day">{group.label} · {dayCounts.get(group.key)}</p>
+        <p class="eyebrow day">{group.label} · {days.get(group.key)?.recordings}</p>
         {#each group.items as r (r.id)}
           <a class="item" href="#/recordings/{r.id}" aria-current={r.id === id ? 'true' : undefined}>
             <span class="item-row">
@@ -139,10 +192,10 @@
           </a>
         {/each}
       {:else}
-        {#if loaded && !error}<p class="muted empty">{recordings.length ? 'No recordings match.' : 'No recordings yet. Fetch them from the cloud on the Home page.'}</p>{/if}
+        {#if loaded && !error}<p class="muted empty">{recordings.length ? (day ? 'No recordings on this day match.' : 'No recordings match.') : 'No recordings yet. Fetch them from the cloud on the Home page.'}</p>{/if}
       {/each}
-      {#if filtered.length > shownCount}
-        <button type="button" class="btn more" onclick={() => { shownCount += PAGE; }}>Show {Math.min(PAGE, filtered.length - shownCount)} more</button>
+      {#if listed.length > shownCount}
+        <button type="button" class="btn more" onclick={() => { shownCount += PAGE; }}>Show {Math.min(PAGE, listed.length - shownCount)} more</button>
       {/if}
     </div>
   </aside>
@@ -170,6 +223,17 @@
   .list-head { padding: 18px 16px 12px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid var(--line-soft); }
   .title-row { display: flex; align-items: baseline; justify-content: space-between; }
   h1 { margin: 0; font-size: 26px; font-weight: 600; }
+  .filters .calendar-toggle { margin-left: auto; color: var(--spruce); }
+  .filters .calendar-toggle[aria-expanded='true'] { background: var(--spruce-soft); border-color: var(--spruce-soft); }
+  .calendar-toggle, .day-filter button {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px;
+    border: 1px solid var(--control-line); background: var(--card); color: var(--spruce);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .day-filter {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 6px 6px 12px; border-radius: 12px; background: var(--spruce-soft); font-size: 14px;
+  }
   .search {
     display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 12px; border-radius: 10px;
     border: 1px solid var(--control-line); background: #FFFFFF; color: var(--muted);
