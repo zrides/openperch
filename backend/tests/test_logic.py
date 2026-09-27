@@ -14,6 +14,13 @@ class PlayerLogicTests(unittest.TestCase):
         self.assertEqual(animals_at(frames, times, 0, 10), ["first"])
         self.assertEqual(animals_at(frames, times, 900, 10), [])
 
+    def test_boxes_stay_on_the_frozen_picture_through_a_camera_dropout(self):
+        frames = [{"animals": ["before"]}, {"animals": ["frozen"]}, {"animals": ["after"]}]
+        times = [0, 100, 4100]
+        self.assertEqual(animals_at(frames, times, 3000, 10), ["frozen"])
+        self.assertEqual(animals_at(frames, times, 4100, 10), ["after"])
+        self.assertEqual(animals_at(frames, times, 4400, 10), [])
+
     def test_cache_invalidates_when_video_or_species_change(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

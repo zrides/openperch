@@ -124,9 +124,15 @@ def iou(a, b):
 
 
 def animals_at(frames, timestamps, milliseconds, fps):
-    """Use the decoded frame timestamp, and never extend boxes across a gap."""
+    """The boxes on screen at a time, by decoded frame timestamp.
+
+    The video shows each frame until the next one starts, including through a camera
+    dropout (a frozen picture), so its boxes stay that long; after the last frame, briefly.
+    """
     index = bisect.bisect_right(timestamps, milliseconds + 1) - 1
-    if 0 <= index < len(timestamps) and abs(milliseconds - timestamps[index]) <= max(100, 2000 / fps):
+    if index < 0:
+        return []
+    if index + 1 < len(timestamps) or milliseconds - timestamps[index] <= max(100, 2000 / fps):
         return frames[index]["animals"]
     return []
 
@@ -295,7 +301,7 @@ class Engine:
 
     def analyze(self, video, model_dir, labels, status, progress, cancel, force=False):
         import cv2
-        from .tracking import TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result
+        from .tracking import PauseClock, TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result
         key = cache_key(video, model_dir, labels)
         cached = None if force else read_cache(key)
         if cached and cached.get('tracker_version') == TRACKER_VERSION:
@@ -328,6 +334,7 @@ class Engine:
         with VideoFrames(video, cancel, self.decode_queue) as source:
             fps, frame_count = source.info['fps'], source.info['frame_count']
             width, height = source.info['width'], source.info['height']
+            clock = PauseClock(fps)
             # Gather crops over a wider chronological window without forcing the
             # detector to use the same batch size (and different numeric kernels).
             for batch in source.batches(max(self.detector_batch_size, self.classification_batch_size)):
@@ -349,7 +356,8 @@ class Engine:
                         detections.append({'box': [round(value, 5) for value in normalized],
                             'detection': round(conf, 4), 'category': ANIMALS[category],
                             'appearance': appearance_descriptor(frame, normalized)})
-                    for item in tracker.update(detections, time_ms):
+                    now = clock(time_ms)
+                    for item in tracker.update(detections, now):
                         tid = item['id']
                         track = classifications.setdefault(tid, {'ranked': [], 'classified': -10000})
                         item['ranked'] = track['ranked']
@@ -365,7 +373,7 @@ class Engine:
                                 destinations.append(destination)
                     # Unrounded: frames of variable-rate live clips can be under 0.01 ms apart,
                     # and saved timestamps must stay strictly increasing for re-tracking.
-                    frames.append({'ms': time_ms, 'animals': current})
+                    frames.append({'ms': time_ms, 'clock': now, 'animals': current})
                     classifications = {tid: state for tid, state in classifications.items() if tid in tracker.tracks}
                     index += 1
                 began = time.perf_counter()

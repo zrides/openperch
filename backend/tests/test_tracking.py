@@ -205,6 +205,33 @@ class TrackerTests(unittest.TestCase):
                          [[a['id'] for a in f['animals']] for f in frames])
         self.assertEqual(again['tracking_stats']['stitched'], 1)
 
+    def dropout_result(self, after_x):
+        # Five frames at 100 ms, then the camera sends nothing for 5 s, then five more frames.
+        finch = [{'label': 'House finch', 'similarity': .5}]
+        times = [0, 100, 200, 300, 400, 5400, 5500, 5600, 5700, 5800]
+        return {'fps': 10, 'tracker_version': 0, 'frames': [
+            {'ms': ms, 'animals': [dict(detection(.2 if ms < 5000 else after_x, appearance=[1., 0.]), id=1, ranked=finch)]}
+            for ms in times]}
+
+    def test_a_bird_that_sits_through_a_camera_dropout_is_one_sighting(self):
+        result = retrack_result(self.dropout_result(.21))
+        self.assertEqual(len({a['id'] for f in result['frames'] for a in f['animals']}), 1)
+        # Real times stay for the player; tracking time counts the 5 s hole as one frame.
+        self.assertEqual([f['ms'] for f in result['frames']][5], 5400)
+        self.assertEqual([f['clock'] for f in result['frames']], [0, 100, 200, 300, 400, 500, 600, 700, 800, 900])
+        groups = collect_sightings(result['frames'])
+        self.assertEqual([(g['start_ms'], g['end_ms']) for g in groups], [(0, 5800)])
+
+    def test_a_different_spot_after_a_dropout_is_a_new_track(self):
+        result = retrack_result(self.dropout_result(.7))
+        self.assertEqual(len({a['id'] for f in result['frames'] for a in f['animals']}), 2)
+        self.assertEqual(len(collect_sightings(result['frames'])), 2)
+
+    def test_pause_clock_counts_a_dropout_as_one_frame(self):
+        from kiwibit_hub.tracking import PauseClock
+        clock = PauseClock(10)
+        self.assertEqual([clock(ms) for ms in (1000, 1100, 1350, 1700, 6700, 6800)], [1000, 1100, 1350, 1700, 1800, 1900])
+
     def test_bad_timestamps_rejected(self):
         tracker = TemporalTracker()
         tracker.update([], 100)
@@ -339,6 +366,8 @@ class EngineTrackingTests(unittest.TestCase):
         self.assertEqual(result['frames'][3]['animals'], [])
         self.assertEqual(len({a['id'] for f in result['frames'] for a in f['animals']}), 1)
         self.assertEqual(result['tracking_stats']['weak_recoveries'], 1)
+        # No dropouts in this video: tracking time is real time.
+        self.assertEqual([f['clock'] for f in result['frames']], [f['ms'] for f in result['frames']])
 
 
 if __name__ == '__main__':

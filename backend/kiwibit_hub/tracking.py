@@ -5,6 +5,7 @@ boxes are used for matching only: output boxes always come from the detector.
 Tracks follow the animal, not the detector's label: YOLO-World renames the same
 animal between frames, so each track's category is decided once from all its frames.
 After the clip, tracks split by a brief miss are joined again (stitch_tracks).
+Camera dropouts count as a pause, not elapsed time (PauseClock).
 This is a small custom tracker, not the ByteTrack implementation or bird re-ID.
 """
 from __future__ import annotations
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 
-TRACKER_VERSION = 4
+TRACKER_VERSION = 5
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
 MAX_GAP_MS = 1200
@@ -26,6 +27,31 @@ CLASSIFIER_WEIGHT = .75
 STITCH_MAX_GAP_MS = 1500
 STITCH_MAX_SIZE_RATIO = 6
 STITCH_MIN_SCORE = .55
+# A camera dropout: no frames for this many frame times, and at least this long.
+DROPOUT_FRAMES = 4
+DROPOUT_MS = 300
+
+
+class PauseClock:
+    """Tracking time in which a camera dropout counts as one frame: a pause, not elapsed time.
+
+    The camera sometimes sends no frames for several seconds (its recording has a hole
+    and the picture freezes). In real time every track would end at the hole, splitting
+    a bird that sat through it into two sightings.
+    """
+
+    def __init__(self, fps):
+        self.frame_ms = 1000/fps if fps and fps > 0 else 1000/15
+        self.last_ms = self.clock = None
+
+    def __call__(self, ms):
+        if self.clock is None:
+            self.clock = ms
+        else:
+            step = ms-self.last_ms
+            self.clock += self.frame_ms if step > max(DROPOUT_FRAMES*self.frame_ms, DROPOUT_MS) else step
+        self.last_ms = ms
+        return self.clock
 
 
 def overlap(a, b):
@@ -148,8 +174,9 @@ def _pieces(frames):
         for animal in frame['animals']:
             piece = pieces.get(animal['id'])
             if piece is None:
-                piece = pieces[animal['id']] = {'first': (index, frame['ms'], animal), 'species': defaultdict(float)}
-            piece['last'] = (index, frame['ms'], animal)
+                piece = pieces[animal['id']] = {'first': (index, frame.get('clock', frame['ms']), animal),
+                                                'species': defaultdict(float)}
+            piece['last'] = (index, frame.get('clock', frame['ms']), animal)
             for rank in animal.get('ranked') or []:
                 piece['species'][rank['label']] += rank.get('similarity', 0)
     for piece in pieces.values():
@@ -369,6 +396,7 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
         import cv2
         capture = cv2.VideoCapture(str(video))
     tracker = TemporalTracker()
+    clock = PauseClock(output.get('fps'))
     try:
         if capture is not None and not capture.isOpened():
             raise ValueError('Cannot decode video for tracking upgrade')
@@ -394,7 +422,8 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
                     animal['appearance'] = appearance_descriptor(image, animal['box'])
                 for key in ('display_label', 'identification_note', 'sighting_id', 'tracklet'):
                     animal.pop(key, None)
-            frame['animals'] = tracker.update(frame['animals'], frame['ms'])
+            frame['clock'] = clock(frame['ms'])
+            frame['animals'] = tracker.update(frame['animals'], frame['clock'])
             if progress and index % 15 == 0:
                 progress(index+1, len(output['frames']))
         output['tracking_stats'] = tracker.finalize(output['frames'], output.get('labels'))

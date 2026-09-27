@@ -8,7 +8,7 @@ import math
 
 from .engine import iou
 
-SMART_VERSION = 5
+SMART_VERSION = 6
 UNCERTAIN = 'Uncertain bird'
 # Species views are sampled at least this far apart within a sighting. The engine
 # classifies each track every 500 ms, so this uses every classification.
@@ -27,11 +27,13 @@ def collect_sightings(frames):
                 continue
             track = animal['id']
             group = active.get(track)
-            if group is None or frame['ms'] - group['end_ms'] > 1500:
+            # Tracking time, in which a camera dropout is a pause (see tracking.PauseClock).
+            now = frame.get('clock', frame['ms'])
+            if group is None or now - group['clock'] > 1500:
                 group = {'track': track, 'start_ms': frame['ms'], 'end_ms': frame['ms'], 'views': []}
                 groups.append(group)
                 active[track] = group
-            group['end_ms'] = frame['ms']
+            group['end_ms'], group['clock'] = frame['ms'], now
             # Sample independent moments instead of counting repeated frame ranks.
             if animal.get('tracking_state') != 'weak' and (not group['views'] or frame['ms'] - group['views'][-1]['ms'] >= VIEW_GAP_MS):
                 last_photo = next((view['ms'] for view in reversed(group['views']) if view['photo']), None)

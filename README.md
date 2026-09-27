@@ -21,7 +21,9 @@ This is an unofficial client built from a reverse-engineered API.
 - **Live**: live video in the browser (720p, 1080p or 4K), snapshots, and
   recording clips straight into the library.
 - **Recordings**: every clip with frame-accurate bird boxes, the sightings in
-  it with their evidence, the top matches for any bird, and corrections.
+  it with their evidence, the top matches for any bird, and corrections. Camera
+  dropouts (seconds where the camera's own recording has no frames and the
+  picture freezes) are marked; a bird that sits through one stays one sighting.
 - **Birds**: species gallery of the best photos per sighting, sightings that
   need review, and corrections.
 - **Camera**: the camera's status and its current settings (read-only for now,

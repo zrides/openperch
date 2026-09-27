@@ -5,12 +5,13 @@
   import { api, ApiError, UNCERTAIN, type Analysis, type Animal, type Recording, type Sighting } from './api';
   import { clock, dateTime, duration } from './format';
   import { hub } from './hub.svelte';
-  import { animalLabel, animalsAt, contentRect } from './overlay';
+  import { animalLabel, animalsAt, contentRect, dropouts } from './overlay';
 
   let { recording, startMs = 0 }: { recording: Recording; startMs?: number } = $props();
 
   let analysis = $state<Analysis | null>(null);
   let timestamps: number[] = [];
+  let gaps = $state<{ start: number; end: number }[]>([]);
   let sightings: Sighting[] = $state([]);
   let loadError = $state('');
   let notice = $state('');
@@ -41,9 +42,11 @@
     if (analysisResult.status === 'fulfilled') {
       analysis = analysisResult.value;
       timestamps = analysis.frames.map((frame) => frame.ms);
+      gaps = dropouts(timestamps, analysis.fps);
     } else {
       analysis = null;
       timestamps = [];
+      gaps = [];
       const error = analysisResult.reason;
       if (!(error instanceof ApiError && error.status === 404)) loadError = String(error?.message ?? error);
     }
@@ -73,8 +76,13 @@
     }
   });
 
-  function update(ms: number) {
-    current = ms;
+  // The camera's recording has a hole here: the picture is frozen.
+  const dropout = $derived(gaps.find((gap) => current >= gap.start && current < gap.end) ?? null);
+
+  // Boxes follow the frame on screen (`ms`); the clock follows the playhead, which
+  // keeps moving while a camera dropout holds a frozen frame.
+  function update(ms: number, playhead = ms) {
+    current = playhead;
     animals = analysis ? animalsAt(analysis, timestamps, ms) : [];
     const selected = animals.find((animal) => animal.id === selectedId);
     if (selected) lastSelected = selected;
@@ -88,7 +96,7 @@
     if (!video || !frameAccurate) return;
     {
       const step = (_now: number, meta: VideoFrameCallbackMetadata) => {
-        update(meta.mediaTime * 1000);
+        update(meta.mediaTime * 1000, video!.currentTime * 1000);
         frameCallback = video!.requestVideoFrameCallback(step);
       };
       frameCallback = video.requestVideoFrameCallback(step);
@@ -198,9 +206,17 @@
     <video bind:this={video} src="/api/recordings/{recording.id}/video" playsinline preload="metadata" muted={muted}
            onloadedmetadata={loaded} onresize={measure}
            onplay={() => { playing = true; }} onpause={() => { playing = false; }}
-           ontimeupdate={() => { if (video && !frameAccurate) update(video.currentTime * 1000); }}
+           ontimeupdate={() => {
+             if (!video) return;
+             // Frame callbacks stop while the picture is frozen; the clock should keep going.
+             if (frameAccurate) current = video.currentTime * 1000;
+             else update(video.currentTime * 1000);
+           }}
            onseeked={() => { if (video) update(video.currentTime * 1000); }}
            onclick={toggle}></video>
+    {#if dropout}
+      <span class="dropout" role="status">Camera dropped out · picture frozen for {((dropout.end - dropout.start) / 1000).toFixed(1)} s</span>
+    {/if}
     <div class="boxes" style:left="{rect.left}px" style:top="{rect.top}px" style:width="{rect.width}px" style:height="{rect.height}px">
       {#each animals as animal (animal.id)}
         {@const box = animal.box}
@@ -225,6 +241,10 @@
     </button>
     <span class="mono time">{clock(current)} / {clock(total)}</span>
     <div class="timeline">
+      {#each gaps as gap (gap.start)}
+        <span class="gap" style:left={percent(gap.start)} style:width="max(3px, calc({percent(gap.end - gap.start)}))"
+              title="Camera dropped out for {((gap.end - gap.start) / 1000).toFixed(1)} s at {clock(gap.start)}"></span>
+      {/each}
       {#each sightings as s (s.id)}
         <span class="span" class:uncertain={uncertain(s)} style:left={percent(s.start_ms)}
               style:width="max(4px, calc({percent(s.end_ms - s.start_ms)}))" title="{label(s)} {clock(s.start_ms)}–{clock(s.end_ms)}"></span>
@@ -330,6 +350,15 @@
   }
   .span { position: absolute; top: 11px; height: 6px; border-radius: 3px; background: #7FA393; }
   .span.uncertain { background: var(--goldfinch); }
+  /* A camera dropout: hatched, behind the sightings, so it reads as "no picture here". */
+  .gap {
+    position: absolute; top: 9px; height: 10px; border-radius: 3px;
+    background: repeating-linear-gradient(135deg, #8E978F 0 3px, transparent 3px 6px); opacity: .8;
+  }
+  .dropout {
+    position: absolute; left: 12px; top: 12px; z-index: 2; padding: 6px 10px; border-radius: 8px;
+    background: rgba(27, 36, 32, .78); color: #FFFFFF; font-size: 13px; font-weight: 600; pointer-events: none;
+  }
   input[type='range'] {
     position: absolute; inset: 0; width: 100%; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer;
   }
