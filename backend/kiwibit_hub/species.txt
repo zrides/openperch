@@ -1,33 +1,23 @@
 # Candidate names for BioCLIP. One label per line. Edit or choose another file in the app.
-# This starter list emphasizes North American feeder birds and familiar animals; it is not exhaustive.
+# Tuned for one backyard feeder (2026-09-26): western, southern and
+# European birds and animals that can't visit here were removed. The broader North
+# American starter list is in git history.
 Northern cardinal
 Blue jay
 American crow
 Fish crow
 Common raven
 Black-capped chickadee
-Mountain chickadee
-Chestnut-backed chickadee
 Tufted titmouse
-Oak titmouse
-Juniper titmouse
-Bridled titmouse
 White-breasted nuthatch
 Red-breasted nuthatch
-Brown-headed nuthatch
-Pygmy nuthatch
 House finch
 Purple finch
-Cassin's finch
 American goldfinch
-Lesser goldfinch
-Lawrence's goldfinch
 Pine siskin
 Evening grosbeak
 Pine grosbeak
 Rose-breasted grosbeak
-Black-headed grosbeak
-Blue grosbeak
 House sparrow
 Song sparrow
 White-throated sparrow
@@ -39,31 +29,17 @@ Fox sparrow
 Lincoln's sparrow
 Swamp sparrow
 Savannah sparrow
-Golden-crowned sparrow
 Dark-eyed junco
 Eastern towhee
-Spotted towhee
-California towhee
 Mourning dove
-White-winged dove
-Eurasian collared dove
-Common ground dove
 Rock pigeon
-Band-tailed pigeon
 European starling
 Common grackle
-Boat-tailed grackle
-Great-tailed grackle
 Red-winged blackbird
-Yellow-headed blackbird
 Rusty blackbird
-Brewer's blackbird
 Brown-headed cowbird
 American robin
 Eastern bluebird
-Western bluebird
-Mountain bluebird
-Varied thrush
 Hermit thrush
 Wood thrush
 Gray catbird
@@ -71,51 +47,29 @@ Northern mockingbird
 Brown thrasher
 Carolina wren
 House wren
-Bewick's wren
 Winter wren
-Cactus wren
 Downy woodpecker
 Hairy woodpecker
 Red-bellied woodpecker
 Red-headed woodpecker
 Pileated woodpecker
 Northern flicker
-Acorn woodpecker
-Ladder-backed woodpecker
-Gila woodpecker
 Yellow-bellied sapsucker
 Ruby-throated hummingbird
-Anna's hummingbird
-Rufous hummingbird
-Black-chinned hummingbird
-Allen's hummingbird
-Costa's hummingbird
-Broad-tailed hummingbird
-Calliope hummingbird
 Baltimore oriole
-Bullock's oriole
 Orchard oriole
-Hooded oriole
-Scott's oriole
 Scarlet tanager
-Summer tanager
-Western tanager
 Indigo bunting
-Painted bunting
-Lazuli bunting
 Yellow-rumped warbler
 Pine warbler
 Yellow warbler
 Palm warbler
-Yellow-throated warbler
 Black-and-white warbler
 Ruby-crowned kinglet
 Golden-crowned kinglet
 Cedar waxwing
-Bohemian waxwing
 Eastern phoebe
 Eastern kingbird
-Western kingbird
 Great crested flycatcher
 Barn swallow
 Tree swallow
@@ -133,60 +87,24 @@ Barred owl
 Eastern screech owl
 Wild turkey
 Northern bobwhite
-California quail
-Gambel's quail
 Mallard duck
 Wood duck
 Canada goose
 Great blue heron
 Great egret
-Black-billed magpie
-Steller's jay
-California scrub jay
-Canada jay
-Pinyon jay
-Clark's nutcracker
-European robin
-Eurasian blue tit
-Great tit
-Coal tit
-Long-tailed tit
-Eurasian blackbird
-European greenfinch
-European goldfinch
-Common chaffinch
-Eurasian siskin
-Eurasian tree sparrow
-Eurasian magpie
-Eurasian jay
-Great spotted woodpecker
-Rose-ringed parakeet
-Monk parakeet
-Budgerigar
-Cockatiel
 Domestic chicken
-Domestic duck
-Peacock
 Eastern gray squirrel
-Fox squirrel
 American red squirrel
-Eurasian red squirrel
 Southern flying squirrel
 Eastern chipmunk
-Least chipmunk
-Ground squirrel
 Raccoon
 Virginia opossum
 Eastern cottontail rabbit
-Snowshoe hare
 Domestic rabbit
 White-tailed deer
-Mule deer
 Red fox
 Gray fox
 Coyote
-American black bear
-Brown bear
 Striped skunk
 Groundhog
 Deer mouse
@@ -195,32 +113,7 @@ Brown rat
 Vole
 Domestic cat
 Domestic dog
-Horse
-Cow
-Sheep
-Goat
-Pig
-Donkey
-Llama
-Alpaca
-Elephant
-Giraffe
-Zebra
-Lion
-Tiger
-Leopard
-Cheetah
-Gray wolf
-Moose
-Elk
-Bison
-Beaver
-River otter
-Porcupine
-Hedgehog
-Raccoon dog
 Bat
-Lizard
 Snake
 Turtle
 Frog

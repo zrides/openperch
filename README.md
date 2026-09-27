@@ -25,7 +25,8 @@ This is an unofficial client built from a reverse-engineered API.
 - **Birds**: species gallery of the best photos per sighting, sightings that
   need review, and corrections.
 - **Camera**: the camera's status and its current settings (read-only for now,
-  see below), automatic fetching, GPU batch sizes, sign-out.
+  see below), automatic fetching, GPU batch sizes, re-analyzing every recording
+  after an AI change, sign-out.
 - **Check the AI**: an answer key of about 150 moments you identify by eye (the
   AI's guess stays hidden), and a score comparing the AI with your answers after
   every change. The answers only measure the AI; they are never used to train it.
@@ -126,7 +127,7 @@ the Kiwibit app.
 | `PUT /api/review/{id}` | `{"verdict": "species" \| "not_bird" \| "several" \| "unsure", "species": "..."}`; `null` verdict clears |
 | `GET /api/review/{id}/image` | The moment's picture, cut from the original frame |
 | `GET /api/review/score` | How the AI's current results compare with your answers |
-| `POST /api/jobs` | `{"action": "scan" \| "process" \| "selected" \| "reanalyze" \| "fetch" \| "verify" \| "upgrade", "ids": [...]}` |
+| `POST /api/jobs` | `{"action": "scan" \| "process" \| "selected" \| "reanalyze" \| "reanalyze_all" \| "fetch" \| "verify" \| "upgrade", "ids": [...]}` |
 | `POST /api/jobs/cancel` | Stop after the current operation |
 | `WS /api/events` | Job state, messages, progress, library changes and live status |
 | `GET/PUT /api/settings/processing` | GPU batch sizes |

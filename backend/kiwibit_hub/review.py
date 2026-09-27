@@ -13,7 +13,7 @@ import random
 import uuid
 from collections import Counter, defaultdict
 
-from .engine import iou
+from .engine import context_square, iou
 from .sightings import UNCERTAIN
 from .tracking import NONBIRD_LABELS
 
@@ -33,12 +33,8 @@ MATCH_IOU = .3
 
 
 def context_view(box, width, height):
-    """A square around the box, in normalized coordinates, kept inside the frame."""
-    x1, y1, x2, y2 = box[0]*width, box[1]*height, box[2]*width, box[3]*height
-    side = min(max(x2-x1, y2-y1)*CONTEXT, width, height)
-    left = min(max(0., (x1+x2-side)/2), width-side)
-    top = min(max(0., (y1+y2-side)/2), height-side)
-    return [round(left/width, 5), round(top/height, 5), round((left+side)/width, 5), round((top+side)/height, 5)]
+    """The square pictured around the box, in normalized coordinates."""
+    return [round(value, 5) for value in context_square(box, width, height, CONTEXT)]
 
 
 def allocate(sizes, budget):

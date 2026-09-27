@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 
-TRACKER_VERSION = 3
+TRACKER_VERSION = 4
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
 MAX_GAP_MS = 1200
@@ -154,7 +154,9 @@ def _pieces(frames):
                 piece['species'][rank['label']] += rank.get('similarity', 0)
     for piece in pieces.values():
         species = piece.pop('species')
-        piece['top'] = set(sorted(species, key=lambda label: (-species[label], label))[:3])
+        ranked = sorted(species, key=lambda label: (-species[label], label))
+        piece['best'] = ranked[0] if ranked else None
+        piece['top'] = set(ranked[:3])
     return pieces
 
 
@@ -165,9 +167,10 @@ def stitch_score(earlier, later):
     gap = start_ms-end_ms
     if not 0 < gap <= STITCH_MAX_GAP_MS:
         return -1.
-    # Species guesses from different crops must share a name: never join a chickadee
-    # that left to a titmouse that arrived, or a bird to a squirrel.
-    if earlier['top'] and later['top'] and not earlier['top'] & later['top']:
+    # Each piece's best species guess must be among the other's top three: never join a
+    # chickadee that left to a titmouse or nuthatch that arrived, or a bird to a squirrel.
+    # (Merely sharing a name let look-alikes join, and a wrong join is named confidently.)
+    if earlier['best'] and later['best'] and not (earlier['best'] in later['top'] and later['best'] in earlier['top']):
         return -1.
     a, b = last['box'], first['box']
     size = max(a[2]-a[0], a[3]-a[1], b[2]-b[0], b[3]-b[1], .02)

@@ -21,7 +21,11 @@ os.environ.setdefault("YOLO_CONFIG_DIR", str(DATA / "ultralytics"))
 os.environ.setdefault("XDG_CACHE_HOME", str(MODELS / "cache"))
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
-VERSION = 3
+VERSION = 4
+# BioCLIP sees a square this many times the box's longer side. Its preprocessing
+# center-crops to a square, which cut heads and tails off long boxes: on the answer
+# key, 88% of bird crops were right before, 96-97% with a 1.4-2x square.
+CROP_CONTEXT = 1.5
 DEFAULT_DETECTOR_BATCH = 4
 DEFAULT_CLASSIFICATION_BATCH = 32
 ANIMALS = ["bird", "squirrel", "chipmunk", "rabbit", "raccoon", "opossum", "deer",
@@ -97,6 +101,18 @@ def decoded_enough(decoded, frame_count, fps):
         return True
     allowance = min(max(2, int(fps), int(frame_count * 0.1)), frame_count // 2)
     return decoded >= frame_count - allowance
+
+
+def context_square(box, width, height, scale):
+    """A square `scale` times the box's longer side, in pixels, kept inside the frame.
+
+    Box in and square out are normalized [x1, y1, x2, y2].
+    """
+    x1, y1, x2, y2 = box[0]*width, box[1]*height, box[2]*width, box[3]*height
+    side = min(max(x2-x1, y2-y1)*scale, width, height)
+    left = min(max(0., (x1+x2-side)/2), width-side)
+    top = min(max(0., (y1+y2-side)/2), height-side)
+    return [left/width, top/height, (left+side)/width, (top+side)/height]
 
 
 def iou(a, b):
@@ -326,11 +342,8 @@ class Engine:
                         item['ranked'] = track['ranked']
                         current.append(item)
                         if item['tracking_state'] != 'weak' and (item['reacquired'] or time_ms - track['classified'] >= 500):
-                            x1, y1, x2, y2 = (item['box'][0]*width, item['box'][1]*height,
-                                              item['box'][2]*width, item['box'][3]*height)
-                            pad_x, pad_y = (x2-x1)*.05, (y2-y1)*.05
-                            crop = frame[max(0, int(y1-pad_y)):min(height, int(y2+pad_y)),
-                                         max(0, int(x1-pad_x)):min(width, int(x2+pad_x))]
+                            x1, y1, x2, y2 = context_square(item['box'], width, height, CROP_CONTEXT)
+                            crop = frame[int(y1*height):round(y2*height), int(x1*width):round(x2*width)]
                             if crop.size:
                                 destination = []
                                 track.update(ranked=destination, classified=time_ms)

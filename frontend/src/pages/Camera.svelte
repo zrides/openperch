@@ -10,6 +10,9 @@
   let error = $state('');
   let refreshing = $state(false);
   let saved = $state('');
+  let recordings = $state<number | null>(null);
+  let confirmRerun = $state(false);
+  let rerunMessage = $state('');
 
   async function load(refresh = false) {
     refreshing = true;
@@ -29,6 +32,18 @@
     refreshing = false;
   }
   load();
+  api.get<{ recordings: number }>('/api/status').then((status) => { recordings = status.recordings; }).catch(() => {});
+
+  async function startRerun() {
+    rerunMessage = '';
+    try {
+      await api.post('/api/jobs', { action: 'reanalyze_all' });
+      confirmRerun = false;
+      rerunMessage = 'Started. Follow it in the progress card; Stop keeps what has finished.';
+    } catch (e) {
+      rerunMessage = e instanceof ApiError && e.status === 409 ? 'Another job is running; try again when it finishes.' : (e as Error).message;
+    }
+  }
 
   async function saveProcessing(change: Partial<ProcessingSettings>) {
     if (!processing) return;
@@ -169,6 +184,22 @@
         </div>
         <p class="muted small" aria-live="polite">{saved || (hub.job.running ? 'Batch sizes can change when the current job finishes.' : '')}</p>
       {/if}
+      <div class="rerun">
+        {#if confirmRerun}
+          <p class="small">Runs the detector and BioCLIP again on all {recordings ?? ''} recordings with the current
+            settings and species list. It uses the GPU for about an hour. The hub stays usable, and each recording keeps
+            its current results until its new ones are saved.</p>
+          <div class="rerun-actions">
+            <button type="button" class="btn btn-primary" onclick={startRerun}>Start re-analysis</button>
+            <button type="button" class="btn" onclick={() => { confirmRerun = false; }}>Cancel</button>
+          </div>
+        {:else}
+          <button type="button" class="btn" disabled={hub.job.running} onclick={() => { confirmRerun = true; rerunMessage = ''; }}>
+            <Icon name="refresh" size={18} />Re-analyze all recordings…
+          </button>
+        {/if}
+        {#if rerunMessage}<p class="muted small" aria-live="polite">{rerunMessage}</p>{/if}
+      </div>
     </section>
 
     {#if hub.session?.auth_required}
@@ -215,6 +246,9 @@
   .switch:disabled:checked { opacity: .85; }
   .range { display: flex; align-items: center; gap: 8px; }
   meter { width: 90px; height: 10px; }
+  .rerun { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+  .rerun p { margin: 0; }
+  .rerun-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .batch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 6px; }
   .batch label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
   select {

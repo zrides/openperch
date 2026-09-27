@@ -9,6 +9,7 @@ import json
 import logging
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -21,7 +22,14 @@ from .sightings import SMART_VERSION
 
 log = logging.getLogger('kiwibit_hub.jobs')
 
-ACTIONS = ('scan', 'import', 'process', 'selected', 'reanalyze', 'fetch', 'verify', 'upgrade')
+ACTIONS = ('scan', 'import', 'process', 'selected', 'reanalyze', 'reanalyze_all', 'fetch', 'verify', 'upgrade')
+
+
+def remaining(seconds):
+    minutes = round(seconds/60)
+    if minutes < 1:
+        return 'under a minute'
+    return f'about {minutes} min' if minutes < 60 else f'about {minutes//60} h {minutes%60:02d} min'
 
 
 class LibraryJob:
@@ -104,6 +112,8 @@ class LibraryJob:
             if self.action != 'scan':
                 if self.action in ('selected', 'reanalyze'):
                     rows = [row for row in db.videos() if row['id'] in self.paths]
+                elif self.action == 'reanalyze_all':
+                    rows = db.videos()  # newest first
                 elif self.action == 'process':
                     rows = [row for row in db.videos() if row['status'] != 'ready']  # includes retrying failures
                 else:
@@ -155,6 +165,7 @@ class LibraryJob:
     def process_rows(self, db, rows, labels):
         failures = 0
         pending = None
+        started = time.monotonic()
         def finish_pending():
             nonlocal pending, failures
             if pending is not None:
@@ -171,12 +182,14 @@ class LibraryJob:
                     check_cancel(self.cancel)
                     db.state(row['id'], 'processing')
                     self.changed()
-                    prefix = f"Video {index+1}/{len(rows)} · {row['name']}"
+                    # Over many recordings, the time left overall is what matters.
+                    left = f' · {remaining((time.monotonic()-started)/index*(len(rows)-index))} left' if index else ''
+                    prefix = f"Video {index+1}/{len(rows)}{left} · {row['name']}"
                     log.info('ANALYZE %s id=%s', prefix, row['id'])
                     try:
                         result = self.engine.analyze(db.video_path(row), self.model, labels,
                             lambda text: self.message(f'{prefix} · {text}'),
-                            self.progress, self.cancel, force=self.action == 'reanalyze')
+                            self.progress, self.cancel, force=self.action in ('reanalyze', 'reanalyze_all'))
                         finish_pending()
                         check_cancel(self.cancel)
                         self.message(f'{prefix} · Saving photos while the next video is analyzed…')

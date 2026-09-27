@@ -170,6 +170,16 @@ class TrackerTests(unittest.TestCase):
         tracker.finalize(frames)
         self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2)
 
+    def test_look_alikes_that_merely_share_a_guess_are_not_stitched(self):
+        # Both pieces list Black-capped chickadee, but each one's best guess is missing from the other.
+        nuthatch = dict(detection(.2), ranked=[{'label': 'White-breasted nuthatch', 'similarity': .5},
+                                              {'label': 'Black-capped chickadee', 'similarity': .3}])
+        chickadee = dict(detection(.21), ranked=[{'label': 'Black-capped chickadee', 'similarity': .5},
+                                                {'label': 'Tufted titmouse', 'similarity': .3}])
+        tracker, frames = self.split_by_a_miss([nuthatch], [chickadee])
+        tracker.finalize(frames)
+        self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2)
+
     def test_two_birds_side_by_side_each_keep_their_own_continuation(self):
         tracker, frames = self.split_by_a_miss([detection(.30), detection(.42)], [detection(.31), detection(.41)])
         tracker.finalize(frames)
@@ -311,10 +321,11 @@ class EngineTrackingTests(unittest.TestCase):
         engine.device = 'cpu'
         engine.prepare = Mock()
         engine.detector = Detector()
-        classifications = []
+        classifications, shapes = [], []
         def classify(crops):
             if crops:
                 classifications.append(engine.detector.index-1)
+                shapes.extend(crop.shape[:2] for crop in crops)
             return [[{'label': 'Northern cardinal', 'similarity': .5, 'score': .8}] for _ in crops]
         engine.classify = classify
         with patch('kiwibit_hub.engine.read_cache', side_effect=AssertionError('Fresh analysis must bypass caches')), \
@@ -322,6 +333,8 @@ class EngineTrackingTests(unittest.TestCase):
             result = engine.analyze(self.video, self.root, ['bird', 'squirrel'], lambda _: None,
                                     lambda *_: None, threading.Event(), force=True)
         self.assertEqual(classifications, [0, 4])
+        # BioCLIP gets a square with context; 1.5x the 35 px box is capped at the 48 px frame.
+        self.assertEqual(shapes, [(48, 48), (48, 48)])
         self.assertEqual(result['frames'][2]['animals'][0]['tracking_state'], 'weak')
         self.assertEqual(result['frames'][3]['animals'], [])
         self.assertEqual(len({a['id'] for f in result['frames'] for a in f['animals']}), 1)

@@ -57,6 +57,38 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(analyzed, expected, action)
             db.close()
 
+    def test_reanalyze_all_runs_every_recording_fresh_and_says_how_long_is_left(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            labels = root / 'labels.txt'
+            labels.write_text('bird\nsquirrel')
+            db = Catalog(root / 'library', root)
+            for name in ('a', 'b', 'c'):
+                video = root / f'{name}.mp4'
+                video.write_bytes(name.encode())
+                db.ingest(video)
+            db.state(db.videos()[0]['id'], 'ready')
+            def analyze(video, model, labels, status, progress, cancel, force):
+                status('Analyzing')
+                raise RuntimeError('stop here')
+            engine = Mock()
+            engine.analyze.side_effect = analyze
+            messages = []
+            job = LibraryJob('reanalyze_all', [], root, labels, db.root, engine,
+                             lambda kind, **data: messages.append(data['text']) if kind == 'message' else None, media_root=root)
+            job.run()
+            self.assertEqual(engine.analyze.call_count, 3)
+            self.assertTrue(all(call.kwargs['force'] for call in engine.analyze.call_args_list))
+            progress = [text for text in messages if text.startswith('Video ')]
+            self.assertNotIn('left', progress[0])
+            self.assertIn('Video 2/3 · under a minute left', progress[1])
+            db.close()
+
+    def test_time_left_reads_naturally(self):
+        from kiwibit_hub.jobs import remaining
+        self.assertEqual([remaining(20), remaining(600), remaining(125*60)],
+                         ['under a minute', 'about 10 min', 'about 2 h 05 min'])
+
     def test_cancelled_queue_keeps_video_pending(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

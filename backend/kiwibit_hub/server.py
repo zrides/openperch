@@ -39,7 +39,7 @@ CLOUD_ERRORS = (OSError, KiwibitError, ValueError, KeyError)
 log = logging.getLogger('kiwibit_hub.server')
 
 # Jobs the API may start. 'import' is excluded: it takes arbitrary server-side paths.
-API_ACTIONS = {'scan', 'process', 'selected', 'reanalyze', 'fetch', 'verify', 'upgrade'}
+API_ACTIONS = {'scan', 'process', 'selected', 'reanalyze', 'reanalyze_all', 'fetch', 'verify', 'upgrade'}
 
 
 # Reachable without signing in: the login itself and the web app's static files.
