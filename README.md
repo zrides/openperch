@@ -170,11 +170,17 @@ to `../data`; set `KIWIBIT_DATA_DIR`, `KIWIBIT_BIOCLIP_DIR` and
 
 To measure a tracking or sighting change before deploying it, compare variants
 against the saved analyses and the "Check the AI" answers. It reads a copy of
-the catalog, runs no models and changes nothing (about 30 seconds for 800 clips):
+the catalog, runs no models and changes nothing (about 30 seconds for 800 clips).
+While the hub runs in Docker, run it inside the container:
 
 ```powershell
-.venv\Scripts\python.exe -m kiwibit_hub.evaluate --library ..\data\library
+docker compose exec hub python -m kiwibit_hub.evaluate --library /data/library
 ```
+
+Don't open `data/library/library.sqlite3` from Windows while the container is
+running, even read-only: the catalog uses SQLite's WAL mode, whose shared memory
+doesn't work across the Docker boundary, and the hub's own reads start failing
+with "disk I/O error".
 
 ## Notes
 

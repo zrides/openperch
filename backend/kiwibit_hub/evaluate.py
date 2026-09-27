@@ -6,7 +6,10 @@ variant's settings, and reports consistency numbers and the answer-key score.
 No model runs. Photo quality is not recomputed (every view counts as 50), so
 compare variants with each other rather than with the hub's own score.
 
-    python -m kiwibit_hub.evaluate --library ../data/library [--variants baseline,stitch]
+    docker compose exec hub python -m kiwibit_hub.evaluate --library /data/library [--variants baseline,stitch]
+
+Run it where the hub runs (inside the container): a Windows process opening the live
+WAL-mode catalog, even read-only, breaks the hub's own reads.
 """
 from __future__ import annotations
 
