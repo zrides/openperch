@@ -26,11 +26,13 @@ from .tracking import NONBIRD_LABELS
 
 # Each variant overrides module settings; everything else is the current code.
 # 'baseline' is tracker v2 with a view per second, as deployed before stitching.
+# 'exclude' drops species from the saved rankings, as a shorter species list would.
 VARIANTS = {
     'baseline': {'tracking.STITCH_MAX_GAP_MS': 0, 'sightings.VIEW_GAP_MS': 1000},
     'stitch': {'sightings.VIEW_GAP_MS': 1000},
     'dense': {'tracking.STITCH_MAX_GAP_MS': 0},
     'stitch+dense': {},
+    'stitch+dense-carolina': {'exclude': frozenset({'Carolina chickadee'})},
 }
 MODULES = {'tracking': tracking, 'sightings': sightings, 'review': review}
 
@@ -40,6 +42,8 @@ def settings(overrides):
     previous = {}
     try:
         for name, value in overrides.items():
+            if name == 'exclude':
+                continue
             module, attribute = name.split('.')
             previous[name] = getattr(MODULES[module], attribute)
             setattr(MODULES[module], attribute, value)
@@ -94,6 +98,14 @@ def mixed_tracks(frames):
     return count
 
 
+def without(result, labels):
+    """The analysis with these species removed from every ranking (never emptied)."""
+    frames = [{**frame, 'animals': [{**animal, 'ranked': [r for r in animal['ranked'] if r['label'] not in labels]
+                                                  or animal['ranked']} if animal.get('ranked') else animal
+                                    for animal in frame['animals']]} for frame in result['frames']]
+    return {**result, 'frames': frames}
+
+
 def evaluate(result, answers, totals):
     """Run the current settings over one saved analysis and add its numbers to totals."""
     # A version no tracker has, so the saved detections are re-tracked under this variant.
@@ -140,7 +152,8 @@ def run(library, variants, database=None):
             result = json.load(source)
         for name in variants:
             with settings(VARIANTS[name]):
-                evaluate(result, answers[video['id']], totals[name])
+                excluded = VARIANTS[name].get('exclude')
+                evaluate(without(result, excluded) if excluded else result, answers[video['id']], totals[name])
     return totals, sum(len(items) for items in answers.values())
 
 

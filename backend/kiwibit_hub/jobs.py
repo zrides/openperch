@@ -16,7 +16,7 @@ from . import config
 from .cancel import Cancelled, check_cancel
 from .catalog import Catalog, discover
 from .diagnostics import redact
-from .engine import Engine, read_labels, SUPPORTED_BATCH_SIZES, DEFAULT_DETECTOR_BATCH, DEFAULT_CLASSIFICATION_BATCH
+from .engine import Engine, read_labels, restrict_rankings, SUPPORTED_BATCH_SIZES, DEFAULT_DETECTOR_BATCH, DEFAULT_CLASSIFICATION_BATCH
 from .sightings import SMART_VERSION
 
 log = logging.getLogger('kiwibit_hub.jobs')
@@ -60,12 +60,16 @@ class LibraryJob:
         try:
             db = self.catalog()
             if self.action == 'upgrade':
+                labels = read_labels(self.labels) if self.labels else None
                 rows = [row for row in db.videos() if row['status'] == 'ready' and row['gallery_version'] < SMART_VERSION]
                 for index, row in enumerate(rows):
                     check_cancel(self.cancel)
                     self.message(f"Improving saved results {index+1}/{len(rows)} · {row['name']}")
                     try:
                         result = db.result(row['id'], annotated=False)
+                        if labels:
+                            # Before re-tracking: joining tracks and bird-or-not both use the rankings.
+                            result = restrict_rankings(result, labels)
                         from .tracking import retrack_result
                         result = retrack_result(result, self.cancel, db.video_path(row), self.message, self.progress)
                         db.save_analysis(row['id'], result, self.cancel)

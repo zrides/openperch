@@ -37,6 +37,21 @@ def read_labels(path):
     return labels
 
 
+def restrict_rankings(result, labels):
+    """Saved rankings limited to the current species list.
+
+    Removing a species then applies to earlier analyses without running the model
+    again: the next species in each saved top five moves up. A ranking whose five
+    are all removed is kept as it was.
+    """
+    allowed = set(labels)
+    return {**result, 'frames': [
+        {**frame, 'animals': [dict(animal, ranked=[rank for rank in animal['ranked'] if rank['label'] in allowed]
+                                            or animal['ranked']) if animal.get('ranked') else animal
+                              for animal in frame['animals']]}
+        for frame in result['frames']]}
+
+
 def cache_key(video, model_dir, labels, version=VERSION):
     def signature(path):
         path = Path(path).resolve()

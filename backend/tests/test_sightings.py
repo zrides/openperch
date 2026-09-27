@@ -190,6 +190,27 @@ class CorrectionTests(unittest.TestCase):
             self.db.save_analysis(identity, self.result, threading.Event())
         self.assertEqual(len(self.db.photos('Purple finch')), 3)
 
+    def test_upgrade_applies_a_shorter_species_list_to_saved_results(self):
+        from kiwibit_hub.jobs import LibraryJob
+        for frame in self.result['frames']:
+            frame['animals'][0]['ranked'] = [{'label': 'Carolina chickadee', 'similarity': .45},
+                                             {'label': 'Black-capped chickadee', 'similarity': .41}]
+        identity = self.db.ingest(self.video)
+        self.db.save_analysis(identity, self.result, threading.Event())
+        self.assertEqual([row['species'] for row in self.db.species()], ['Carolina chickadee'])
+        self.db.db.execute('UPDATE videos SET gallery_version=0')
+        self.db.db.commit()
+        labels = self.root / 'species.txt'
+        labels.write_text('Black-capped chickadee\nTufted titmouse\n')
+        engine = Mock()
+        LibraryJob('upgrade', [], None, labels, self.db.root, engine).run()
+        engine.analyze.assert_not_called()
+        # The next saved species moves up; nothing is guessed from outside the list.
+        self.assertEqual([row['species'] for row in self.db.species()], ['Black-capped chickadee'])
+        saved = self.db.result(identity, annotated=False)
+        self.assertEqual({r['label'] for f in saved['frames'] for a in f['animals'] for r in a['ranked']},
+                         {'Black-capped chickadee'})
+
     def test_saved_results_upgrade_does_not_run_models(self):
         from kiwibit_hub.jobs import LibraryJob
         from kiwibit_hub.sightings import SMART_VERSION
