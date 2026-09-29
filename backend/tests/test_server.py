@@ -221,6 +221,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status['photos'], 3)
         self.assertFalse(status['job']['running'])
         self.assertEqual(status['sdcard'], {'recordings': 0, 'waiting': 0})
+        self.assertEqual(status['outdated'], 0)
+        db = Catalog(self.library, self.root)
+        db.db.execute('UPDATE videos SET gallery_version=0')
+        db.db.commit()
+        db.close()
+        self.assertEqual(self.client.get('/api/status').json()['outdated'], 1)
 
     def add_cloud_and_card(self, card_name='2026-09-18T11-30-00PM-04-00.mp4', card_length=12.0, cameras=('camera',)):
         import json as _json

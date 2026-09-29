@@ -30,6 +30,7 @@ from .kiwibit_api import KiwibitError
 from .live import LiveError, LiveManager
 from .overlap import coverage, estimate_offset, recorded_at, start_seconds
 from .scheduler import FetchScheduler, run_forever
+from .sightings import SMART_VERSION
 
 CLOUD_ERRORS = (OSError, KiwibitError, ValueError, KeyError)
 
@@ -312,6 +313,8 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         card = [row for row in rows if from_sdcard(row)]
         return {'recordings': len(rows), 'by_status': counts, 'species': len(species),
                 'sdcard': {'recordings': len(card), 'waiting': sum(row['status'] != 'ready' for row in card)},
+                # Analyzed with older tracking or sighting rules; the 'upgrade' job brings them up to date.
+                'outdated': sum(row['status'] == 'ready' and row['gallery_version'] < SMART_VERSION for row in rows),
                 'photos': sum(row['photos'] for row in species),
                 'unmatched_corrections': len(db.unmatched_corrections()), 'job': runner.state}
 

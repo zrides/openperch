@@ -18,6 +18,9 @@
   let cardMessage = $state('');
   let confirmRerun = $state(false);
   let rerunMessage = $state('');
+  // Recordings analyzed under older tracking rules; updating them needs no AI models.
+  let outdated = $state(0);
+  let confirmUpgrade = $state(false);
 
   async function load(refresh = false) {
     refreshing = true;
@@ -37,13 +40,14 @@
     refreshing = false;
   }
   load();
-  type Status = { recordings: number; by_status: Record<string, number>; sdcard: { recordings: number; waiting: number } };
+  type Status = { recordings: number; by_status: Record<string, number>; sdcard: { recordings: number; waiting: number }; outdated: number };
   async function loadStatus() {
     try {
       const status = await api.get<Status>('/api/status');
       recordings = status.recordings;
       waiting = Object.entries(status.by_status).filter(([state]) => state !== 'ready').reduce((sum, [, n]) => sum + n, 0);
       card = status.sdcard;
+      outdated = status.outdated;
     } catch {
       /* the counts are a convenience */
     }
@@ -69,11 +73,12 @@
     }
   }
 
-  async function startRerun() {
+  async function startRerun(action: 'reanalyze_all' | 'upgrade' = 'reanalyze_all') {
     rerunMessage = '';
     try {
-      await api.post('/api/jobs', { action: 'reanalyze_all' });
+      await api.post('/api/jobs', { action });
       confirmRerun = false;
+      confirmUpgrade = false;
       rerunMessage = 'Started. Follow it in the progress card; Stop keeps what has finished.';
     } catch (e) {
       rerunMessage = e instanceof ApiError && e.status === 409 ? 'Another job is running; try again when it finishes.' : (e as Error).message;
@@ -220,15 +225,28 @@
         <p class="muted small" aria-live="polite">{saved || (hub.job.running ? 'Batch sizes can change when the current job finishes.' : '')}</p>
       {/if}
       <div class="rerun">
+        {#if confirmUpgrade}
+          <p class="small">Applies the latest tracking and sighting rules to the saved results of {outdated.toLocaleString()}
+            recordings, and cuts their bird photos again. No AI model runs, but every video is read once, so it can take a
+            while. Corrections stay with their sightings.</p>
+          <div class="rerun-actions">
+            <button type="button" class="btn btn-primary" onclick={() => startRerun('upgrade')}>Apply to {outdated.toLocaleString()}</button>
+            <button type="button" class="btn" onclick={() => { confirmUpgrade = false; }}>Cancel</button>
+          </div>
+        {:else if outdated && !confirmRerun}
+          <button type="button" class="btn" disabled={hub.job.running} onclick={() => { confirmUpgrade = true; rerunMessage = ''; }}>
+            <Icon name="refresh" size={18} />Apply tracking improvements ({outdated.toLocaleString()})…
+          </button>
+        {/if}
         {#if confirmRerun}
           <p class="small">Runs the detector and BioCLIP again on all {recordings ?? ''} recordings with the current
             settings and species list. It uses the GPU for about an hour. The hub stays usable, and each recording keeps
             its current results until its new ones are saved.</p>
           <div class="rerun-actions">
-            <button type="button" class="btn btn-primary" onclick={startRerun}>Start re-analysis</button>
+            <button type="button" class="btn btn-primary" onclick={() => startRerun()}>Start re-analysis</button>
             <button type="button" class="btn" onclick={() => { confirmRerun = false; }}>Cancel</button>
           </div>
-        {:else}
+        {:else if !confirmUpgrade}
           <button type="button" class="btn" disabled={hub.job.running} onclick={() => { confirmRerun = true; rerunMessage = ''; }}>
             <Icon name="refresh" size={18} />Re-analyze all recordings…
           </button>
