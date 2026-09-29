@@ -11,6 +11,7 @@ import logging
 import threading
 import urllib.error
 import urllib.parse
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -369,55 +370,91 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def camera_of(request: Request) -> CameraService:
         return request.app.state.camera
 
-    manifest_cache = {'mtime': None, 'durations': {}, 'cameras': 0}
+    manifest_cache = {'mtime': None, 'durations': {}, 'serials': {}, 'cameras': set()}
 
     def manifest():
-        """Clip lengths and the number of cameras from the download manifest, reloaded when it changes."""
+        """Clip lengths and cameras (by catalog path) from the download manifest, reloaded when it changes."""
         path = media_root / 'downloads' / 'download_manifest.jsonl'
         try:
             mtime = path.stat().st_mtime_ns
         except FileNotFoundError:
-            return {'durations': {}, 'cameras': 0}
+            return {'durations': {}, 'serials': {}, 'cameras': set()}
         if manifest_cache['mtime'] != mtime:
             records = read_manifest(path)
             manifest_cache['durations'] = {'downloads/' + name: record.get('durationSeconds')
                                            for name, record in records.items()}
-            manifest_cache['cameras'] = len({record.get('serialNumber') for record in records.values()} - {None})
+            manifest_cache['serials'] = {'downloads/' + name: record.get('serialNumber')
+                                         for name, record in records.items() if record.get('serialNumber')}
+            manifest_cache['cameras'] = set(manifest_cache['serials'].values())
             manifest_cache['mtime'] = mtime
         return manifest_cache
+
+    def main_camera(cameras):
+        """The account's default camera, else the only one; None when that can't be told."""
+        try:
+            configured = app.state.camera.account().get('defaultSerialNumber')
+        except Exception:  # no account file (tests, local development)
+            configured = None
+        if configured:
+            return configured
+        return next(iter(cameras)) if len(cameras) == 1 else None
+
+    def card_camera(path, cameras, main):
+        """SD-card clips belong to the main camera, or to the camera whose serial number names
+        their folder: data/sdcard/<serial number>/...."""
+        parts = path.split('/')
+        return parts[1] if len(parts) > 2 and parts[1] in cameras else main
 
     def durations():
         return manifest()['durations']
 
     def card_copies(db, rows):
-        """({cloud id: covering card clip}, summary): cloud clips whose moment the SD card also holds."""
+        """({cloud id: covering card clip}, summary): cloud clips whose moment the SD card also holds.
+
+        Matched camera by camera: a cloud clip only against card clips from the same camera, with
+        that camera's own clock offset. A card clip whose camera can't be told matches nothing.
+        """
         info = manifest()
-        lengths = info['durations']
-        cloud = [(row['id'], start_seconds(row['name']), lengths.get(row['path']))
-                 for row in rows if row['origin'] == 'cloud']
-        cards = {row['id']: row for row in rows if row['origin'] == 'sdcard' and (row['duration'] or 0) > 0}
-        spans = [(identity, start_seconds(row['name']) or row['started'], row['duration'])
-                 for identity, row in cards.items()]
-        offset, pairs = estimate_offset([start for _, start, _ in cloud if start is not None],
-                                        [start for _, start, _ in spans if start is not None])
-        summary = {'offset_seconds': round(offset, 2), 'pairs': pairs, 'several_cameras': info['cameras'] > 1}
-        if summary['several_cameras']:
-            # Card clips carry no camera; with several cameras a match could be another camera's.
-            return {}, summary
-        covered = coverage(cloud, spans, offset)
-        # Only a card file that is still there, unchanged since it was measured, may stand in.
-        gone = set()
-        for identity in {cover['id'] for cover in covered.values()}:
-            row = cards[identity]
-            try:
-                stat = db.video_path(row).stat()
-                if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
+        lengths, cameras = info['durations'], info['cameras']
+        main = main_camera(cameras)
+        cloud, spans, cards = defaultdict(list), defaultdict(list), {}
+        unassigned = 0
+        for row in rows:
+            if row['origin'] == 'cloud':
+                # Downloads recorded before cameras were: the main camera's when there is only one.
+                camera = info['serials'].get(row['path']) or (main if len(cameras) <= 1 else None)
+                if camera:
+                    cloud[camera].append((row['id'], start_seconds(row['name']), lengths.get(row['path'])))
+            elif row['origin'] == 'sdcard' and (row['duration'] or 0) > 0:
+                camera = card_camera(row['path'], cameras, main)
+                if camera is None:
+                    unassigned += 1
+                    continue
+                cards[row['id']] = row
+                spans[camera].append((row['id'], start_seconds(row['name']) or row['started'], row['duration']))
+        covered, offsets = {}, {}
+        for camera, clips in cloud.items():
+            offset, pairs = estimate_offset([start for _, start, _ in clips if start is not None],
+                                            [start for _, start, _ in spans[camera] if start is not None])
+            offsets[camera] = (offset, pairs)
+            found = coverage(clips, spans[camera], offset)
+            # Only a card file that is still there, unchanged since it was measured, may stand in.
+            gone = set()
+            for identity in {cover['id'] for cover in found.values()}:
+                row = cards[identity]
+                try:
+                    stat = db.video_path(row).stat()
+                    if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
+                        gone.add(identity)
+                except OSError:
                     gone.add(identity)
-            except OSError:
-                gone.add(identity)
-        if gone:
-            covered = coverage(cloud, [span for span in spans if span[0] not in gone], offset)
-        return covered, summary
+            if gone:
+                found = coverage(clips, [span for span in spans[camera] if span[0] not in gone], offset)
+            covered.update(found)
+        offset, pairs = offsets.get(main, (0.0, 0))
+        # Serial numbers stay out of the reply: the main camera's figures, and counts.
+        return covered, {'offset_seconds': round(offset, 2), 'pairs': pairs, 'cameras': len(cameras),
+                         'several_cameras': len(cameras) > 1, 'unassigned_card_clips': unassigned}
 
     def video_row(db, identity):
         row = db.db.execute('SELECT * FROM videos WHERE id=?', (identity,)).fetchone()

@@ -259,7 +259,8 @@ class ServerTests(unittest.TestCase):
         # A search that leaves out the card clip does not change what covers what.
         self.assertEqual(self.recording(cloud, q='20260919')['covered_by']['id'], card)
         self.assertEqual(self.client.get('/api/recordings/card-copies').json(),
-                         {'offset_seconds': 0.0, 'pairs': 1, 'several_cameras': False, 'hidden': 1})
+                         {'offset_seconds': 0.0, 'pairs': 1, 'cameras': 1, 'several_cameras': False,
+                          'unassigned_card_clips': 0, 'hidden': 1})
         # Kept listed on request, and hidden again on request; it survives a restart (it is in the catalog).
         self.assertEqual(self.client.put(f'/api/recordings/{cloud}/always-show', json={'value': True}).status_code, 200)
         row = self.recording(cloud)
@@ -291,6 +292,42 @@ class ServerTests(unittest.TestCase):
                 cloud, _, _ = self.add_cloud_and_card(**options)
                 self.assertIsNone(self.recording(cloud)['covered_by'])
         self.assertTrue(self.client.get('/api/recordings/card-copies').json()['several_cameras'])
+
+    def test_with_two_cameras_card_clips_match_their_own_camera_only(self):
+        import json as _json
+        from kiwibit_hub.camera import CameraService
+        # Two cameras recorded at the same moment; the SD card holds footage of each.
+        records, ids = [], {}
+        for serial in ('main-cam', 'second-cam'):
+            folder = self.root / 'downloads' / serial
+            folder.mkdir(parents=True)
+            (folder / '20260919T033000Z_0123456789abcdef.mp4').write_bytes(serial.encode())
+            records.append({'file': f'{serial}/20260919T033000Z_0123456789abcdef.mp4', 'durationSeconds': 10,
+                            'serialNumber': serial})
+        (self.root / 'downloads' / 'download_manifest.jsonl').write_text(''.join(_json.dumps(r) + '\n' for r in records))
+        cards = {'main card': self.root / 'sdcard' / 'DCIM' / '2026-09-18T11-30-00PM-04-00.mp4',
+                 'second card': self.root / 'sdcard' / 'second-cam' / 'DCIM' / '2026-09-18T11-30-00PM-04-00.mp4'}
+        db = Catalog(self.library, self.root)
+        for serial in ('main-cam', 'second-cam'):
+            ids[serial] = db.ingest(self.root / 'downloads' / serial / '20260919T033000Z_0123456789abcdef.mp4')
+        for name, path in cards.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode())
+            ids[name] = db.ingest(path)
+            db.set_media(ids[name], 12.0, None)
+        db.close()
+        # Without a default camera, card clips outside a camera's folder can't be told apart: they match nothing.
+        self.assertIsNone(self.recording(ids['main-cam'])['covered_by'])
+        self.assertEqual(self.recording(ids['second-cam'])['covered_by']['id'], ids['second card'],
+                         "a card clip in a camera's folder is that camera's")
+        self.assertEqual(self.client.get('/api/recordings/card-copies').json()['unassigned_card_clips'], 1)
+        # With the account's default camera, the card clips at the top belong to it.
+        self.client.app.state.camera = CameraService(account={'defaultSerialNumber': 'main-cam'})
+        self.assertEqual(self.recording(ids['main-cam'])['covered_by']['id'], ids['main card'])
+        self.assertEqual(self.recording(ids['second-cam'])['covered_by']['id'], ids['second card'])
+        summary = self.client.get('/api/recordings/card-copies').json()
+        self.assertEqual((summary['cameras'], summary['several_cameras'], summary['hidden']), (2, True, 2))
+        self.assertNotIn('main-cam', _json.dumps(summary), 'serial numbers stay out of the reply')
 
     def test_recording_times_come_from_cloud_and_sd_card_names(self):
         from kiwibit_hub.server import recorded_at

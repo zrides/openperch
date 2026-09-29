@@ -41,7 +41,9 @@ lists the cloud copies again, and each one links to its card copy and can be
 kept in the list. Nothing is deleted. Matching needs no video decoding: the
 difference between the cloud's and the camera's clocks is measured from
 clips that start close together (Kiwibit's cloud labels read 3 s early), and
-with one camera only. Anything unclear keeps the cloud recording listed.
+camera by camera. Card clips belong to the account's default camera; clips
+from another camera's card go in `data/sdcard/<its serial number>/`. Anything
+unclear keeps the cloud recording listed.
 `GET /api/recordings/card-copies` reports the measured offset and the count.
 - **Check the AI**: an answer key of about 150 moments you identify by eye (the
   AI's guess stays hidden), and a score comparing the AI with your answers after
