@@ -240,7 +240,8 @@
         {/if}
         {#if confirmRerun}
           <p class="small">Runs the detector and BioCLIP again on all {recordings ?? ''} recordings with the current
-            settings and species list. It uses the GPU for about an hour. The hub stays usable, and each recording keeps
+            settings and species list. It uses the GPU for about 12 minutes per hour of video (a full SD card is
+            several hours). The hub stays usable, and each recording keeps
             its current results until its new ones are saved.</p>
           <div class="rerun-actions">
             <button type="button" class="btn btn-primary" onclick={() => startRerun()}>Start re-analysis</button>

@@ -31,14 +31,32 @@ class PlayerLogicTests(unittest.TestCase):
             first = cache_key(video, root, ["bird", "squirrel"])
             self.assertNotEqual(first, cache_key(video, root, ["bird", "rabbit"]))
             video.write_bytes(b"a different video")
-            second = cache_key(video, root, ["bird", "squirrel"])
-            self.assertNotEqual(first, second)
-            # Another detector gets its own saved analyses; the default detector's keys never changed.
-            from unittest.mock import patch
-            with patch("kiwibit_hub.engine.DETECTOR", "bakeoff/yoloe-26l-seg.pt"):
-                self.assertNotEqual(second, cache_key(video, root, ["bird", "squirrel"]))
-            with patch("kiwibit_hub.engine.DETECTOR", "yolov8s-worldv2.pt"):
-                self.assertEqual(second, cache_key(video, root, ["bird", "squirrel"]))
+            self.assertNotEqual(first, cache_key(video, root, ["bird", "squirrel"]))
+
+    def test_each_detector_has_its_own_saved_analyses(self):
+        import hashlib
+        import json
+        from unittest.mock import patch
+        from kiwibit_hub.engine import ANIMALS, VERSION
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            video = root / "video.mp4"
+            video.write_bytes(b"video")
+            (root / "open_clip_config.json").write_text("{}")
+            (root / "open_clip_model.safetensors").write_bytes(b"weights")
+            keys = {}
+            for detector in ("yolov8s-worldv2.pt", "yolov8x-worldv2.pt", "bakeoff/yoloe-26l-seg.pt"):
+                with patch("kiwibit_hub.engine.DETECTOR", detector):
+                    keys[detector] = cache_key(video, root, ["bird"])
+            self.assertEqual(len(set(keys.values())), 3)
+            # The original small model's keys are exactly those saved before detectors were configurable.
+            def signature(path):
+                stat = path.resolve().stat()
+                return [str(path.resolve()), stat.st_size, stat.st_mtime_ns]
+            spec = {"version": VERSION, "video": signature(video), "labels": ["bird"],
+                    "model": signature(root / "open_clip_model.safetensors"),
+                    "config": signature(root / "open_clip_config.json"), "detector": ANIMALS}
+            self.assertEqual(keys["yolov8s-worldv2.pt"], hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest())
 
     def test_candidate_file_ignores_comments_and_duplicates(self):
         with tempfile.TemporaryDirectory() as folder:

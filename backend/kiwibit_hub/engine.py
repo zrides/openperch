@@ -31,10 +31,12 @@ DEFAULT_CLASSIFICATION_BATCH = 32
 ANIMALS = ["bird", "squirrel", "chipmunk", "rabbit", "raccoon", "opossum", "deer",
            "fox", "cat", "dog", "bear", "rodent", "horse", "cow", "sheep", "goat",
            "pig", "elephant", "giraffe", "zebra", "monkey", "lizard", "snake", "turtle", "frog"]
-# Detector weights under MODELS. YOLO-World by default; a name starting with "yoloe" loads YOLOE,
-# whose text prompts need mobileclip2_b.ts in MODELS.
-DEFAULT_DETECTOR = "yolov8s-worldv2.pt"
-DETECTOR = os.environ.get("KIWIBIT_DETECTOR", DEFAULT_DETECTOR)
+# Detector weights under MODELS (Ultralytics downloads a missing YOLO-World file on first use).
+# A name starting with "yoloe" loads YOLOE, whose text prompts need mobileclip2_b.ts in MODELS.
+# The extra-large YOLO-World: on the answer key 89% correct vs 84% for the small one (2026-09-29).
+DETECTOR = os.environ.get("KIWIBIT_DETECTOR", "yolov8x-worldv2.pt")
+# Analyses cached before detectors were configurable came from this one; its keys stay as they were.
+ORIGINAL_DETECTOR = "yolov8s-worldv2.pt"
 
 
 def read_labels(path):
@@ -69,7 +71,7 @@ def cache_key(video, model_dir, labels, version=VERSION):
             "model": signature(Path(model_dir) / "open_clip_model.safetensors"),
             "config": signature(Path(model_dir) / "open_clip_config.json"),
             # Unchanged for the default detector, so its saved analyses stay valid.
-            "detector": ANIMALS if DETECTOR == DEFAULT_DETECTOR else {"weights": DETECTOR, "classes": ANIMALS}}
+            "detector": ANIMALS if DETECTOR == ORIGINAL_DETECTOR else {"weights": DETECTOR, "classes": ANIMALS}}
     return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
 
 
@@ -311,7 +313,8 @@ class Engine:
 
     def analyze(self, video, model_dir, labels, status, progress, cancel, force=False):
         import cv2
-        from .tracking import PauseClock, TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result
+        from .tracking import (PauseClock, TemporalTracker, TRACKER_VERSION, appearance_descriptor, retrack_result,
+                               start_confidence)
         key = cache_key(video, model_dir, labels)
         cached = None if force else read_cache(key)
         if cached and cached.get('tracker_version') == TRACKER_VERSION:
@@ -336,7 +339,7 @@ class Engine:
         last_status = prepared
         timings = {'model_seconds': prepared-started, 'detector_seconds': 0., 'classifier_seconds': 0.}
         frames = []
-        tracker = TemporalTracker()
+        tracker = TemporalTracker(start_confidence(DETECTOR))
         classifications = {}
         index = 0
         status("Detecting animals and ranking species…")

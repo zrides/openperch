@@ -17,8 +17,13 @@ import math
 from pathlib import Path
 
 TRACKER_VERSION = 6
+# A detection this confident can start a track; weaker ones (down to LOW) only continue one.
+# The start level suits the detector that made the boxes (see start_confidence).
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
+# The extra-large YOLO-World scores more boxes above .22; .30 kept its answer-key gains
+# (84% -> 89% correct) without extra short sightings.
+DETECTOR_HIGH_CONFIDENCE = {'yolov8x-worldv2.pt': .30}
 MAX_GAP_MS = 1200
 NONBIRD_LABELS = set((Path(__file__).parent / 'nonbird-labels.txt').read_text(encoding='utf-8-sig').splitlines())
 # BioCLIP separates birds from other animals far more reliably than the detector's labels.
@@ -263,8 +268,14 @@ class Track:
         return [self.box[0]+dx, self.box[1]+dy, self.box[2]+dx, self.box[3]+dy]
 
 
+def start_confidence(detector):
+    """HIGH_CONFIDENCE for boxes from this detector (weights file name; None: the original small model)."""
+    return DETECTOR_HIGH_CONFIDENCE.get(Path(detector).name if detector else '', HIGH_CONFIDENCE)
+
+
 class TemporalTracker:
-    def __init__(self):
+    def __init__(self, high=None):
+        self.high = high
         self.tracks = {}
         self.next_id = 1
         self.last_ms = None
@@ -331,8 +342,9 @@ class TemporalTracker:
                 usable.append(item)
         # Spatial ordering makes births and ties independent of detector output order.
         usable.sort(key=lambda d: (*d['box'], d['category']))
-        high = [d for d in usable if d['detection'] >= HIGH_CONFIDENCE]
-        low = [d for d in usable if d['detection'] < HIGH_CONFIDENCE]
+        start = HIGH_CONFIDENCE if self.high is None else self.high
+        high = [d for d in usable if d['detection'] >= start]
+        low = [d for d in usable if d['detection'] < start]
         outputs, used = [], set()
         for candidates, weak in [(high, False), (low, True)]:
             tracks = [t for tid, t in sorted(self.tracks.items()) if tid not in used]
@@ -401,7 +413,8 @@ def retrack_result(result, cancel=None, video=None, status=None, progress=None):
     if video is not None and any('appearance' not in animal for frame in output['frames'] for animal in frame['animals']):
         import cv2
         capture = cv2.VideoCapture(str(video))
-    tracker = TemporalTracker()
+    # Analyses from before detectors were recorded came from the original small model.
+    tracker = TemporalTracker(start_confidence(output.get('detector')))
     clock = PauseClock(output.get('fps'))
     try:
         if capture is not None and not capture.isOpened():

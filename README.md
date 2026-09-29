@@ -80,7 +80,12 @@ Use a VPN such as Tailscale rather than exposing the hub to the internet.
   read-only Docker secret. It is never copied into the image or `data/`.
 
 Override any of these in `.env`. The YOLO-World detector downloads into
-`data/models` on first use if it is not already there.
+`data/models` on first use if it is not already there. It is the extra-large
+model (`yolov8x-worldv2.pt`, 146 MB); set `KIWIBIT_DETECTOR` to another weights
+file under `data/models` to change it (a name starting with `yoloe` loads
+YOLOE). Each analysis records its detector, and each detector has its own
+confidence for starting a track. After changing it, re-analyze all recordings
+from the Camera page.
 
 ### Recordings and identification
 

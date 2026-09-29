@@ -22,6 +22,8 @@ services:
       KIWIBIT_LIVE_HOSTS: ${KIWIBIT_LIVE_HOSTS:-127.0.0.1}
       # Seconds without a job before the AI models' GPU memory is freed (0 = right after each job).
       KIWIBIT_GPU_IDLE_SECONDS: ${KIWIBIT_GPU_IDLE_SECONDS:-300}
+      # Detector weights under data/models (see README). Re-analyze all recordings after changing it.
+      KIWIBIT_DETECTOR: ${KIWIBIT_DETECTOR:-yolov8x-worldv2.pt}
     volumes:
       - ${KIWIBIT_DATA_DIR:-./data}:/data
       - ${KIWIBIT_BIOCLIP_DIR:-../bioclip-2.5-vith14}:/models/bioclip:ro

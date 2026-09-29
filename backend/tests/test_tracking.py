@@ -199,6 +199,19 @@ class TrackerTests(unittest.TestCase):
             tracker.finalize(frames)
             self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2, (later[0]['box'], gap))
 
+    def test_the_start_level_follows_the_detector_that_made_the_boxes(self):
+        from kiwibit_hub.tracking import start_confidence
+        self.assertEqual(start_confidence(None), .22)  # saved before detectors were recorded: the small model
+        self.assertEqual(start_confidence('yolov8s-worldv2.pt'), .22)
+        self.assertEqual(start_confidence('bakeoff/yolov8x-worldv2.pt'), .30)
+        self.assertEqual(len(TemporalTracker().update([detection(.2, score=.25)], 0)), 1)
+        self.assertEqual(TemporalTracker(.30).update([detection(.2, score=.25)], 0), [])
+        # Re-tracking a saved analysis uses its own detector's level.
+        frames = [{'ms': ms, 'animals': [dict(detection(.2, score=.25), id=1)]} for ms in range(0, 500, 100)]
+        for detector, tracks in [(None, 1), ('yolov8x-worldv2.pt', 0)]:
+            result = retrack_result({'frames': copy.deepcopy(frames), 'fps': 10, 'detector': detector, 'tracker_version': 0})
+            self.assertEqual(len({a['id'] for f in result['frames'] for a in f['animals']}), tracks, detector)
+
     def test_a_still_bird_missed_for_seconds_stays_one_sighting(self):
         # A finch sits on the rim while the detector misses it for 4 s: one track and one sighting,
         # but only where it was, and only within the allowed gap.
