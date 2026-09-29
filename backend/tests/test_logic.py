@@ -31,7 +31,14 @@ class PlayerLogicTests(unittest.TestCase):
             first = cache_key(video, root, ["bird", "squirrel"])
             self.assertNotEqual(first, cache_key(video, root, ["bird", "rabbit"]))
             video.write_bytes(b"a different video")
-            self.assertNotEqual(first, cache_key(video, root, ["bird", "squirrel"]))
+            second = cache_key(video, root, ["bird", "squirrel"])
+            self.assertNotEqual(first, second)
+            # Another detector gets its own saved analyses; the default detector's keys never changed.
+            from unittest.mock import patch
+            with patch("kiwibit_hub.engine.DETECTOR", "bakeoff/yoloe-26l-seg.pt"):
+                self.assertNotEqual(second, cache_key(video, root, ["bird", "squirrel"]))
+            with patch("kiwibit_hub.engine.DETECTOR", "yolov8s-worldv2.pt"):
+                self.assertEqual(second, cache_key(video, root, ["bird", "squirrel"]))
 
     def test_candidate_file_ignores_comments_and_duplicates(self):
         with tempfile.TemporaryDirectory() as folder:

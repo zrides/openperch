@@ -31,6 +31,10 @@ DEFAULT_CLASSIFICATION_BATCH = 32
 ANIMALS = ["bird", "squirrel", "chipmunk", "rabbit", "raccoon", "opossum", "deer",
            "fox", "cat", "dog", "bear", "rodent", "horse", "cow", "sheep", "goat",
            "pig", "elephant", "giraffe", "zebra", "monkey", "lizard", "snake", "turtle", "frog"]
+# Detector weights under MODELS. YOLO-World by default; a name starting with "yoloe" loads YOLOE,
+# whose text prompts need mobileclip2_b.ts in MODELS.
+DEFAULT_DETECTOR = "yolov8s-worldv2.pt"
+DETECTOR = os.environ.get("KIWIBIT_DETECTOR", DEFAULT_DETECTOR)
 
 
 def read_labels(path):
@@ -63,7 +67,9 @@ def cache_key(video, model_dir, labels, version=VERSION):
         return [str(path), stat.st_size, stat.st_mtime_ns]
     spec = {"version": version, "video": signature(video), "labels": labels,
             "model": signature(Path(model_dir) / "open_clip_model.safetensors"),
-            "config": signature(Path(model_dir) / "open_clip_config.json"), "detector": ANIMALS}
+            "config": signature(Path(model_dir) / "open_clip_config.json"),
+            # Unchanged for the default detector, so its saved analyses stay valid.
+            "detector": ANIMALS if DETECTOR == DEFAULT_DETECTOR else {"weights": DETECTOR, "classes": ANIMALS}}
     return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
 
 
@@ -272,14 +278,18 @@ class Engine:
         check_cancel(cancel)
         if self.detector is None:
             (Path(os.environ["YOLO_CONFIG_DIR"]) / "Ultralytics").mkdir(parents=True, exist_ok=True)
-            from ultralytics import YOLOWorld
+            from ultralytics import YOLOE, YOLOWorld
             import ultralytics.utils
             status("Loading the animal detector (first launch downloads its weights)…")
             MODELS.mkdir(parents=True, exist_ok=True)
             ultralytics.utils.SETTINGS.update({"weights_dir": str(MODELS), "sync": False})
             ultralytics.utils.WEIGHTS_DIR = MODELS
-            detector = YOLOWorld(str(MODELS / "yolov8s-worldv2.pt"))
-            detector.set_classes(ANIMALS)
+            if Path(DETECTOR).name.startswith("yoloe"):
+                detector = YOLOE(str(MODELS / DETECTOR))
+                detector.set_classes(ANIMALS, detector.get_text_pe(ANIMALS))
+            else:
+                detector = YOLOWorld(str(MODELS / DETECTOR))
+                detector.set_classes(ANIMALS)
             self.detector = detector
         check_cancel(cancel)
 
@@ -396,7 +406,7 @@ class Engine:
             raise ValueError("The video or model changed during analysis. Retry once the file is complete.")
         result = {"version": VERSION, "complete": True, "video": str(Path(video).resolve()),
                   "width": width, "height": height, "fps": fps, "labels": labels, "frames": frames,
-                  "model": str(model_dir), "device": self.device,
+                  "model": str(model_dir), "detector": DETECTOR, "device": self.device,
                   "tracker_version": TRACKER_VERSION, "tracking_stats": tracker.finalize(frames, labels),
                   'performance': {**{k: round(v, 3) for k, v in timings.items()},
                       'analysis_seconds': round(time.perf_counter()-prepared, 3),
