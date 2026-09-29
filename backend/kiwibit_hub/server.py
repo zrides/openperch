@@ -566,9 +566,40 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             raise HTTPException(409, str(exc)) from exc
         return review_items(db)
 
+    @app.post('/api/review/batch', status_code=201)
+    def review_add_batch(db: Catalog = Depends(catalog)):
+        """About 150 more moments from the library as it is now; earlier answers stay."""
+        videos = db.videos()
+        copies, _ = card_copies(db, videos)
+        used = {row[0] for row in db.db.execute('SELECT DISTINCT video_id FROM answer_key')}
+        # One copy of each moment: the SD-card clip over its cloud copy, and nothing already in the key.
+        exclude = set(copies) | {cover['id'] for cloud, cover in copies.items() if cloud in used}
+        try:
+            batch, added = review.add_batch(db, exclude=exclude)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        log.info('Answer key batch %s: %s moments', batch, added)
+        new = [row[0] for row in db.db.execute('SELECT id FROM answer_key WHERE batch=? ORDER BY position', (batch,))]
+        preparing = threading.Thread(target=prepare_pictures, args=(new,), name='review-pictures', daemon=True)
+        app.state.review_pictures = preparing
+        preparing.start()
+        return review_items(db)
+
+    def prepare_pictures(ids):
+        """Cut each new moment's picture ahead of time: SD-card clips are long 4K videos."""
+        db = Catalog(library, media_root, migrate=False)
+        try:
+            for item_id in ids:
+                try:
+                    review.image(db, item_id)
+                except (OSError, ValueError, LookupError) as exc:
+                    log.warning('Could not prepare the picture for moment %s: %s', item_id, exc)
+        finally:
+            db.close()
+
     @app.get('/api/review/score')
-    def review_score(db: Catalog = Depends(catalog)):
-        return review.score(db)
+    def review_score(batch: int | None = None, db: Catalog = Depends(catalog)):
+        return {**review.score(db, batch), 'batch': batch, 'batches': review.batches(db)}
 
     @app.put('/api/review/{item_id}')
     def review_answer(item_id: str, body: ReviewAnswer, db: Catalog = Depends(catalog)):

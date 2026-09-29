@@ -24,6 +24,9 @@ DEFAULT_SIZE = 150
 # something other than a bird, and bird boxes that never became a sighting.
 MISS_SHARE = {'not_bird': .13, 'no_sighting': .13}
 MAX_PER_VIDEO = 2
+# In added batches, this share of the sighting moments comes from uncertain sightings: the
+# look-alikes and brief visits that improvements to the AI mostly target.
+UNCERTAIN_SHARE = .35
 # Guesses the AI made fewer times than this share one group, so dozens of one-off
 # guesses don't crowd out the birds that actually visit.
 MIN_GROUP = 5
@@ -95,6 +98,22 @@ def _moment(video_id, result, frame, box, source):
             'view': context_view(box, result['width'], result['height']), 'source': source}
 
 
+def _alone(result, frame, box):
+    """No other animal covers part of this box: the moment shows one animal to name, not several.
+
+    Overlap is measured against the smaller box, so a small bird in front of a big one counts.
+    """
+    area = lambda b: max(0., b[2]-b[0]) * max(0., b[3]-b[1])
+    for animal in result['frames'][frame]['animals']:
+        other = animal['box']
+        if other == box:
+            continue
+        shared = max(0., min(other[2], box[2])-max(other[0], box[0])) * max(0., min(other[3], box[3])-max(other[1], box[1]))
+        if shared > .1 * max(1e-9, min(area(other), area(box))):
+            return False
+    return True
+
+
 def _clearest(frames_and_animals):
     """The frame where the detector was most confident, as a stand-in for the clearest view."""
     frame, animal = max(frames_and_animals, key=lambda item: (item[1].get('detection', 0), -item[0]))
@@ -105,8 +124,30 @@ def build(db, size=DEFAULT_SIZE, seed=None):
     """Pick the moments to answer. Refuses to replace an existing key."""
     if db.db.execute('SELECT count(*) FROM answer_key').fetchone()[0]:
         raise ValueError('The answer key already exists')
+    return _pick(db, size, seed, batch=1, exclude=set(), uncertain_share=0, alone=False)
+
+
+def add_batch(db, size=DEFAULT_SIZE, seed=None, exclude=()):
+    """More moments, from the library as it is now. Earlier answers and batches stay as they are.
+
+    Recordings already in the key are skipped, and so is anything in `exclude` (say, the other copy
+    of a moment the SD card and the cloud both hold). Part of the sightings are uncertain ones, and a
+    moment is only taken where no other animal overlaps its box. Returns (batch, moments added).
+    """
+    used = {row[0] for row in db.db.execute('SELECT DISTINCT video_id FROM answer_key')}
+    if not used:
+        raise ValueError('Answer the first key before adding more moments')
+    batch = db.db.execute('SELECT max(batch) FROM answer_key').fetchone()[0] + 1
+    return batch, _pick(db, size, seed, batch, used | set(exclude), UNCERTAIN_SHARE, alone=True)
+
+
+def batches(db):
+    return [row[0] for row in db.db.execute('SELECT DISTINCT batch FROM answer_key ORDER BY batch')]
+
+
+def _pick(db, size, seed, batch, exclude, uncertain_share, alone):
     rng = random.Random(seed)
-    ready = {row['id'] for row in db.videos() if row['status'] == 'ready' and row['result']}
+    ready = {row['id'] for row in db.videos() if row['status'] == 'ready' and row['result']} - set(exclude)
     results = {}
 
     def result(video_id):
@@ -117,38 +158,48 @@ def build(db, size=DEFAULT_SIZE, seed=None):
                 results[video_id] = None
         return results[video_id]
 
-    by_guess = defaultdict(list)
+    # Sightings by kind (all, or confident and uncertain), then by the AI's best guess.
+    kinds = {'sighting': defaultdict(list)} if not uncertain_share else {'sighting': defaultdict(list),
+                                                                         'uncertain': defaultdict(list)}
     for row in db.db.execute('''SELECT s.*, (SELECT p.ms FROM photos p WHERE p.sighting_id=s.id
                                    ORDER BY p.quality DESC LIMIT 1) AS best_ms
                                 FROM sightings s WHERE s.active=1 ORDER BY s.id'''):
         if row['video_id'] in ready:
             evidence = json.loads(row['evidence'])
-            by_guess[evidence.get('suggestion') or row['ai_species']].append(row)
-    sightings = defaultdict(list)
-    for guess, rows in by_guess.items():
-        sightings[guess if len(rows) >= MIN_GROUP else ''].extend(rows)
+            kind = 'uncertain' if uncertain_share and row['ai_species'] == UNCERTAIN else 'sighting'
+            kinds[kind][evidence.get('suggestion') or row['ai_species']].append(row)
     miss_budget = {stratum: round(size*share) for stratum, share in MISS_SHARE.items()}
+    sighting_budget = size-sum(miss_budget.values())
+    budgets = ({'sighting': sighting_budget} if not uncertain_share else
+               {'uncertain': round(sighting_budget*uncertain_share),
+                'sighting': sighting_budget-round(sighting_budget*uncertain_share)})
     picker = _Picker()
 
     # Sightings, grouped by the AI's best guess so every species it often names gets checked.
-    quotas = allocate({guess: len(rows) for guess, rows in sightings.items()}, size-sum(miss_budget.values()))
-    for guess in sorted(quotas):
-        rows = sightings[guess][:]
-        rng.shuffle(rows)
-        candidates = []
-        for row in rows:
-            if len(candidates) >= quotas[guess]*3:
-                break
-            analysis = result(row['video_id'])
-            anchors = json.loads(row['anchors'])
-            if analysis is None or not anchors:
-                continue
-            # The sighting's best photo, else its middle view.
-            wanted = row['best_ms'] if row['best_ms'] is not None else anchors[len(anchors)//2]['ms']
-            anchor = min(anchors, key=lambda a: abs(a['ms']-wanted))
-            candidates.append(_moment(row['video_id'], analysis, _frame_index(analysis, anchor['ms']), anchor['box'],
-                                      ('sighting', row['id'])))
-        picker.take(candidates, quotas[guess], 'sighting')
+    for kind, by_guess in kinds.items():
+        sightings = defaultdict(list)
+        for guess, rows in by_guess.items():
+            sightings[guess if len(rows) >= MIN_GROUP else ''].extend(rows)
+        quotas = allocate({guess: len(rows) for guess, rows in sightings.items()}, budgets[kind])
+        for guess in sorted(quotas):
+            rows = sightings[guess][:]
+            rng.shuffle(rows)
+            candidates = []
+            for row in rows:
+                if len(candidates) >= quotas[guess]*3:
+                    break
+                analysis = result(row['video_id'])
+                anchors = json.loads(row['anchors'])
+                if analysis is None or not anchors:
+                    continue
+                # The sighting's best photo, else its middle view.
+                wanted = row['best_ms'] if row['best_ms'] is not None else anchors[len(anchors)//2]['ms']
+                anchor = min(anchors, key=lambda a: abs(a['ms']-wanted))
+                frame = _frame_index(analysis, anchor['ms'])
+                if alone and not _alone(analysis, frame, anchor['box']):
+                    continue
+                candidates.append(_moment(row['video_id'], analysis, frame, anchor['box'], ('sighting', row['id'])))
+            picker.take(candidates, quotas[guess], kind)
 
     # What the AI leaves out, from a random selection of recordings.
     pools = {stratum: [] for stratum in MISS_SHARE}
@@ -169,6 +220,10 @@ def build(db, size=DEFAULT_SIZE, seed=None):
                 tracks[animal['id']].append((index, animal))
         for track, seen in sorted(tracks.items()):
             category = seen[0][1]['category']
+            if alone:
+                seen = [(i, a) for i, a in seen if _alone(analysis, i, a['box'])]
+                if not seen:
+                    continue
             if category != 'bird' and any(animal.get('ranked') for _, animal in seen):
                 frame, box = _clearest(seen)
                 pools['not_bird'].append(_moment(video_id, analysis, frame, box, ('track', video_id, track)))
@@ -189,19 +244,21 @@ def build(db, size=DEFAULT_SIZE, seed=None):
     rng.shuffle(moments)
     with db.db:
         db.db.execute('BEGIN IMMEDIATE')
-        if db.db.execute('SELECT count(*) FROM answer_key').fetchone()[0]:
-            raise ValueError('The answer key already exists')
-        db.db.executemany('''INSERT INTO answer_key(id,position,video_id,frame,ms,box,view,stratum)
-                             VALUES(?,?,?,?,?,?,?,?)''',
-                          [(uuid.uuid4().hex, position, m['video_id'], m['frame'], m['ms'],
-                            json.dumps(m['box']), json.dumps(m['view']), m['stratum'])
-                           for position, m in enumerate(moments)])
+        latest = db.db.execute('SELECT max(batch), max(position) FROM answer_key').fetchone()
+        if (latest[0] or 0) != batch - 1:
+            raise ValueError('The answer key changed meanwhile; reload and try again')
+        start = latest[1] + 1 if latest[1] is not None else 0
+        db.db.executemany('''INSERT INTO answer_key(id,position,video_id,frame,ms,box,view,stratum,batch)
+                             VALUES(?,?,?,?,?,?,?,?,?)''',
+                          [(uuid.uuid4().hex, start + offset, m['video_id'], m['frame'], m['ms'],
+                            json.dumps(m['box']), json.dumps(m['view']), m['stratum'], batch)
+                           for offset, m in enumerate(moments)])
     return len(moments)
 
 
 def items(db):
     """Every moment with its answer. Deliberately without the AI's guess or why it was picked."""
-    rows = db.db.execute('''SELECT k.id, k.video_id, v.name, k.ms, k.box, k.view, k.verdict, k.answer, k.answered
+    rows = db.db.execute('''SELECT k.id, k.batch, k.video_id, v.name, k.ms, k.box, k.view, k.verdict, k.answer, k.answered
                             FROM answer_key k JOIN videos v ON v.id=k.video_id ORDER BY k.position''')
     return [{**dict(row), 'box': json.loads(row['box']), 'view': json.loads(row['view'])} for row in rows]
 
@@ -296,9 +353,9 @@ def outcome(verdict, species, ai):
     return 'shown_as_bird' if ai['kind'] == 'sighting' else 'left_out'
 
 
-def score(db):
-    """Compare every answer with what the AI says at that moment now."""
-    rows = db.db.execute('SELECT * FROM answer_key ORDER BY position').fetchall()
+def score(db, batch=None):
+    """Compare every answer (or one batch's) with what the AI says at that moment now."""
+    rows = db.db.execute('SELECT * FROM answer_key WHERE ? IS NULL OR batch=? ORDER BY position', (batch, batch)).fetchall()
     results, sightings = {}, {}
     birds = Counter()
     not_birds = Counter()

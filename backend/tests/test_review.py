@@ -74,6 +74,50 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             review.build(self.db)
 
+    def second_recording(self):
+        """Another recording: the finch again, plus a bird seen too briefly to name (an uncertain sighting)."""
+        import shutil
+        video = self.root / 'downloads' / '20260921T090000Z_feeder.avi'
+        shutil.copy(self.video, video)
+        identity = self.db.ingest(video)
+        frames = [{'ms': n*100, 'animals': [animal(1, [.1, .1, .5, .6])] + ([animal(5, [.6, .1, .8, .3])] if n < 2 else [])}
+                  for n in range(21)]
+        self.db.save_analysis(identity, {**self.result, 'frames': frames}, threading.Event())
+        return identity
+
+    def test_added_batches_take_new_recordings_and_keep_earlier_answers(self):
+        with self.assertRaisesRegex(ValueError, 'first key'):
+            review.add_batch(self.db)
+        review.build(self.db, seed=1)
+        first = {row['id'] for row in self.db.db.execute('SELECT id FROM answer_key')}
+        review.answer(self.db, next(iter(first)), 'species', 'House finch')
+        with self.assertRaisesRegex(ValueError, 'no processed recordings'):
+            review.add_batch(self.db, seed=1)  # its only recording is already in the key
+        second = self.second_recording()
+        batch, added = review.add_batch(self.db, seed=1)
+        rows = self.db.db.execute('SELECT * FROM answer_key ORDER BY position').fetchall()
+        self.assertEqual((batch, added), (2, len(rows) - len(first)))
+        new = [row for row in rows if row['batch'] == 2]
+        self.assertTrue(new and all(row['video_id'] == second for row in new))
+        self.assertIn('uncertain', {row['stratum'] for row in new}, 'part of the sightings are uncertain ones')
+        self.assertEqual([row['position'] for row in rows], list(range(len(rows))), 'positions continue')
+        self.assertEqual(sum(row['verdict'] is not None for row in rows), 1, 'earlier answers stay')
+        self.assertEqual(review.batches(self.db), [1, 2])
+        self.assertEqual(review.score(self.db, 2)['total'], len(new))
+        self.assertEqual(review.score(self.db)['total'], len(rows))
+
+    def test_excluded_recordings_are_never_picked(self):
+        review.build(self.db, seed=1)
+        second = self.second_recording()
+        with self.assertRaisesRegex(ValueError, 'no processed recordings'):
+            review.add_batch(self.db, seed=1, exclude={second})
+
+    def test_a_moment_shows_one_animal(self):
+        result = {'frames': [{'animals': [animal(1, [.1, .1, .5, .6]), animal(2, [.4, .4, .7, .8])]},
+                             {'animals': [animal(1, [.1, .1, .5, .6]), animal(2, [.6, .6, .9, .9])]}]}
+        self.assertFalse(review._alone(result, 0, [.1, .1, .5, .6]))
+        self.assertTrue(review._alone(result, 1, [.1, .1, .5, .6]))
+
     def test_best_photo_lookup_uses_an_index(self):
         # Without one, picking moments took minutes on the hub's Docker data volume.
         plan = ' '.join(str(row[-1]) for row in self.db.db.execute(
@@ -84,7 +128,7 @@ class ReviewTests(unittest.TestCase):
         review.build(self.db, seed=1)
         items = review.items(self.db)
         self.assertEqual(len(items), 2)
-        self.assertEqual(set(items[0]), {'id', 'video_id', 'name', 'ms', 'box', 'view', 'verdict', 'answer', 'answered'})
+        self.assertEqual(set(items[0]), {'id', 'batch', 'video_id', 'name', 'ms', 'box', 'view', 'verdict', 'answer', 'answered'})
 
     def test_answers_are_validated_and_can_be_cleared(self):
         review.build(self.db, seed=1)
@@ -172,6 +216,20 @@ class ReviewTests(unittest.TestCase):
             picture = client.get(f'/api/review/{item}/image')
             self.assertEqual((picture.status_code, picture.headers['content-type']), (200, 'image/jpeg'))
             self.assertEqual(client.get('/api/review/score').json()['excluded'], 1)
+            # A second batch: only recordings not yet in the key; its pictures are prepared in the background.
+            self.assertEqual(client.post('/api/review/batch').status_code, 409, 'nothing new to pick from')
+            self.db = Catalog(library, self.root)
+            self.second_recording()
+            self.db.close()
+            added = client.post('/api/review/batch')
+            self.assertEqual(added.status_code, 201)
+            client.app.state.review_pictures.join(30)  # it has the recordings open
+            picture = next(row['id'] for row in added.json() if row['batch'] == 2)
+            self.assertTrue((library / 'review' / f'{picture}.jpg').is_file(), 'pictures are ready ahead of time')
+            self.assertEqual({row['batch'] for row in added.json()}, {1, 2})
+            second = client.get('/api/review/score', params={'batch': 2}).json()
+            self.assertEqual((second['batch'], second['batches'], second['answered']), (2, [1, 2], 0))
+            self.assertEqual(client.get('/api/review/score').json()['total'], len(added.json()))
         self.db = Catalog(library, self.root)
 
 

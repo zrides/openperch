@@ -116,6 +116,9 @@ class Catalog:
                 cloud = self.cloud_files()
                 for identity, path in self.db.execute('SELECT id, path FROM videos').fetchall():
                     self.db.execute('UPDATE videos SET origin=? WHERE id=?', (origin_of(path, cloud), identity))
+            if 'batch' not in {r[1] for r in self.db.execute('PRAGMA table_info(answer_key)')}:
+                # Moments are added in batches; the first key is batch 1.
+                self.db.execute('ALTER TABLE answer_key ADD COLUMN batch INTEGER NOT NULL DEFAULT 1')
             photo_columns = {r[1] for r in self.db.execute('PRAGMA table_info(photos)')}
             for name, declaration in [('sighting_id', 'TEXT'), ('quality', 'REAL NOT NULL DEFAULT 0'),
                                       ('featured', 'INTEGER NOT NULL DEFAULT 1')]:

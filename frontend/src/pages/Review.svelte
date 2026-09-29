@@ -27,6 +27,10 @@
   let error = $state('');
   let score = $state<ReviewScore | null>(null);
   let scoreError = $state('');
+  // Which batch the score covers: null for every moment.
+  let scoreBatch = $state<number | null>(null);
+  let confirmAdd = $state(false);
+  let adding = $state(false);
   let picture: HTMLElement | undefined = $state();
   let guideOpen = $state(false);
   // Field-guide photo per quick species, once loaded; '' when Wikipedia has none.
@@ -34,6 +38,10 @@
 
   const item = $derived(items[index] ?? null);
   const answered = $derived(items.filter((i) => i.verdict !== null).length);
+  const batches = $derived([...new Set(items.map((i) => i.batch))].sort((a, b) => a - b));
+  const latest = $derived(batches[batches.length - 1] ?? 1);
+  const latestItems = $derived(items.filter((i) => i.batch === latest));
+  const latestAnswered = $derived(latestItems.filter((i) => i.verdict !== null).length);
   const allDone = $derived(items.length > 0 && answered === items.length);
   // Moments you already identified, by species: your own camera's examples for the field guide.
   const examples = $derived.by(() => {
@@ -97,9 +105,25 @@
     }
   }
 
+  async function addMoments() {
+    adding = true;
+    error = '';
+    try {
+      await api.post('/api/review/batch');
+      confirmAdd = false;
+      score = null;
+      tab = 'answer';
+      await load();
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : 'Could not pick more moments';
+    } finally {
+      adding = false;
+    }
+  }
+
   async function loadScore() {
     try {
-      score = await api.get<ReviewScore>('/api/review/score');
+      score = await api.get<ReviewScore>(scoreBatch === null ? '/api/review/score' : `/api/review/score?batch=${scoreBatch}`);
       scoreError = '';
     } catch (e) {
       scoreError = (e as Error).message;
@@ -250,13 +274,14 @@
       </button>
     </section>
   {:else if tab === 'answer' && item}
-    <div class="progress" aria-label="{answered} of {items.length} answered">
-      <div class="bar"><div style:width="{percent(answered, items.length)}%"></div></div>
-      <span class="mono small">{answered} / {items.length} answered</span>
+    <div class="progress" aria-label="{latestAnswered} of {latestItems.length} answered">
+      <div class="bar"><div style:width="{percent(latestAnswered, latestItems.length)}%"></div></div>
+      <span class="mono small">{batches.length > 1 ? `Key ${latest}: ` : ''}{latestAnswered} / {latestItems.length} answered</span>
     </div>
 
     {#if allDone}
-      <p class="done">All {items.length} moments answered. <button type="button" class="link" onclick={() => { tab = 'score'; }}>See the score</button></p>
+      <p class="done">All {items.length} moments answered. <button type="button" class="link" onclick={() => { tab = 'score'; }}>See the score</button>
+        · <button type="button" class="link" onclick={() => { confirmAdd = true; tab = 'score'; }}>Add more moments</button></p>
     {/if}
 
     <div class="answer">
@@ -335,6 +360,14 @@
     {:else}
       <section class="score" aria-labelledby="score-title">
         <h2 id="score-title" class="visually-hidden">Score</h2>
+        {#if score.batches.length > 1}
+          <div class="segmented batches" role="group" aria-label="Moments scored">
+            <button type="button" aria-pressed={scoreBatch === null} onclick={() => { scoreBatch = null; loadScore(); }}>All</button>
+            {#each score.batches as batch (batch)}
+              <button type="button" aria-pressed={scoreBatch === batch} onclick={() => { scoreBatch = batch; loadScore(); }}>Key {batch}</button>
+            {/each}
+          </div>
+        {/if}
         {#if score.birds.graded < MEANINGFUL}
           <p class="note">Answer at least {MEANINGFUL} birds for a score worth comparing. So far {score.birds.graded}.</p>
         {/if}
@@ -376,6 +409,29 @@
         </dl>
         <p class="muted small">If the best guess is right far more often than birds are named correctly, the AI is
           being too cautious. "Missed" means it showed no sighting for a bird you saw.</p>
+
+        <div class="card add">
+          {#if confirmAdd}
+            <p>Picks about 150 new moments from recordings not yet in the key, as the library is now: SD-card clips
+              included (one copy of each moment), about a third from uncertain sightings, and only moments where no
+              other animal overlaps the box. Your earlier answers stay, and each key keeps its own score.
+              The pictures are prepared in the background over the next few minutes.</p>
+            <div class="add-actions">
+              <button type="button" class="btn btn-primary" disabled={adding} onclick={addMoments}>
+                {adding ? 'Picking moments…' : 'Pick 150 more'}
+              </button>
+              <button type="button" class="btn" onclick={() => { confirmAdd = false; }}>Cancel</button>
+            </div>
+          {:else}
+            <p class="muted small">More answered birds make every score steadier: with {score.birds.graded}, one bird
+              moves it by {score.birds.graded ? Math.round(100 / score.birds.graded * 10) / 10 : 0} points.</p>
+            <button type="button" class="btn" disabled={latestAnswered < latestItems.length}
+                    onclick={() => { confirmAdd = true; }}>Add more moments…</button>
+            {#if latestAnswered < latestItems.length}
+              <p class="muted small">Finish the moments already picked first.</p>
+            {/if}
+          {/if}
+        </div>
 
         {#if score.confusions.length}
           <h3 class="serif">Where its best guess differs from you</h3>
@@ -419,6 +475,10 @@
 {/if}
 
 <style>
+  .batches { align-self: flex-start; margin-bottom: 4px; }
+  .add { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .add p { margin: 0; }
+  .add-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .page { padding: 28px 36px; display: flex; flex-direction: column; gap: 18px; max-width: 1180px; }
   .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 34px; font-weight: 600; line-height: 1.1; }

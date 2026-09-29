@@ -182,6 +182,8 @@ export type Verdict = 'species' | 'not_bird' | 'several' | 'unsure';
 /** A moment to identify by eye. It carries no AI guess, so nothing sways the answer. */
 export interface ReviewItem {
   id: string;
+  /** Moments are added in batches: 1 is the first key. */
+  batch: number;
   video_id: string;
   name: string;
   recorded_at: string | null;
@@ -203,6 +205,9 @@ export interface ReviewGrades {
 }
 
 export interface ReviewScore {
+  /** The batch scored, or null for all of them. */
+  batch: number | null;
+  batches: number[];
   total: number;
   answered: number;
   /** "Can't tell" and "More than one animal" answers, which grade nothing. */
