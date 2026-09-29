@@ -1,7 +1,8 @@
 <script lang="ts">
+  import Accounts from '../lib/Accounts.svelte';
   import Icon from '../lib/Icon.svelte';
   import { api, ApiError, type Camera, type CameraSetting, type CameraSettings, type FetchSchedule, type ProcessingSettings } from '../lib/api';
-  import { hub, signOut } from '../lib/hub.svelte';
+  import { hub } from '../lib/hub.svelte';
 
   let camera = $state<Camera | null>(null);
   let settings = $state<CameraSettings | null>(null);
@@ -289,11 +290,8 @@
 
     {#if hub.session?.auth_required}
       <section class="card panel" aria-labelledby="account-title">
-        <h2 id="account-title" class="serif">Hub account</h2>
-        <div class="line">
-          <span class="label">Signed in as {hub.session.user}</span>
-          <button type="button" class="btn" onclick={signOut}>Sign out</button>
-        </div>
+        <h2 id="account-title" class="serif">Hub accounts</h2>
+        <Accounts />
       </section>
     {/if}
   </div>

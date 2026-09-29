@@ -134,7 +134,9 @@ the Kiwibit app.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/login`, `POST /api/logout`, `GET /api/session` | Sign in and out |
+| `POST /api/login`, `POST /api/logout`, `GET /api/session` | Sign in and out; the session says the account's role |
+| `GET/POST /api/users`, `PUT/DELETE /api/users/{name}` | Admins: list, add (`{"name", "password", "role": "member" \| "admin"}`), change role or password, remove |
+| `PUT /api/account/password` | Change your own password (`{"current", "new"}`) |
 | `GET /api/status` | Counts and current job |
 | `GET /api/recordings?q=&limit=` | Recordings, newest first, with species, duration and cover photo |
 | `GET /api/recordings/{id}/video` | Original video (supports seeking; `?download=true`) |
@@ -159,11 +161,17 @@ the Kiwibit app.
 | `POST /api/live/offer`, `POST /api/live/stop` | Browser SDP offer → answer; end the session |
 | `POST /api/live/record`, `POST /api/live/record/stop` | Record a clip from live view |
 
-Sign in on the web page (a 30-day HttpOnly session cookie; changing the
-password signs every device out). Scripts can use HTTP Basic with the same
-account. Everything under `/api` except health and sign-in requires one of the
-two, and cross-site requests are refused. Five failed sign-ins lock sign-in
-for five minutes.
+Sign in on the web page (a 30-day HttpOnly session cookie). The account in
+`.env` is the owner, always an admin. Admins add more accounts under **Hub
+accounts** on the Camera page: members use everything else in the hub; admins
+also manage accounts. Added accounts live in `data/users.json` as salted scrypt
+hashes, never as passwords. Changing an account's password signs it out on
+every device, and removing it signs it out at once; everyone but the owner can
+change their own password there (the owner's stays in `.env`). Scripts can use
+HTTP Basic with any account. Everything under `/api` except health and sign-in
+requires one of the two, and cross-site requests are refused. Five failed
+sign-ins from one address, on the page or through HTTP Basic, lock sign-in for
+five minutes.
 
 ## Develop without Docker
 

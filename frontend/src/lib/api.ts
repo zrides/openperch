@@ -36,6 +36,7 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown = {}) => request<T>('POST', path, body),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
+  del: <T>(path: string) => request<T>('DELETE', path),
 };
 
 export type LiveState = 'idle' | 'starting' | 'waking' | 'signaling' | 'joining' | 'connecting' | 'streaming' | 'ended';
@@ -212,10 +213,24 @@ export interface ReviewScore {
   confusions: { answer: string; guess: string; count: number }[];
 }
 
+export type Role = 'admin' | 'member';
+
 export interface Session {
   authenticated: boolean;
   user: string | null;
+  /** Admins also manage accounts. */
+  role?: Role | null;
+  /** The account set in the hub's .env file. */
+  owner?: boolean;
   auth_required: boolean;
+}
+
+/** Someone who can sign in to the hub. */
+export interface HubAccount {
+  name: string;
+  role: Role;
+  owner: boolean;
+  created: number | null;
 }
 
 export interface JobState {

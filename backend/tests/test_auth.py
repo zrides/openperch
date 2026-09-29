@@ -8,7 +8,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from kiwibit_hub.auth import SESSION_COOKIE, Credentials, LoginLimiter, load_or_create_secret
+from kiwibit_hub.auth import SESSION_COOKIE, Credentials, LoginLimiter, UserStore, load_or_create_secret
 from kiwibit_hub.jobs import JobRunner
 from kiwibit_hub.server import create_app
 
@@ -36,6 +36,44 @@ class CredentialTests(unittest.TestCase):
         token = self.creds.issue()
         changed = Credentials('kiwibit', 'new password', b'k' * 32)
         self.assertIsNone(changed.verify(token))
+
+    def test_added_accounts_sign_in_and_their_sessions_follow_their_password(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = UserStore(Path(folder) / 'users.json')
+            creds = Credentials('kiwibit', 'correct horse', b'k' * 32, store)
+            store.add('Robin', 'robin-pass-1', 'member')
+            self.assertNotIn('robin-pass-1', (Path(folder) / 'users.json').read_text(), 'only a hash is stored')
+            self.assertEqual(creds.authenticate('robin', 'robin-pass-1'), 'Robin', 'names ignore case')
+            self.assertIsNone(creds.authenticate('Robin', 'wrong password'))
+            self.assertIsNone(creds.authenticate('nobody', 'robin-pass-1'))
+            self.assertIsNone(creds.authenticate('KIWIBIT', 'correct horse'), "the owner's name is exact")
+            self.assertEqual((creds.role('Robin'), creds.role('kiwibit'), creds.role('nobody')), ('member', 'admin', None))
+            robin, owner = creds.issue('Robin'), creds.issue()
+            self.assertEqual((creds.verify(robin), creds.verify(owner)), ('Robin', 'kiwibit'))
+            # A token naming someone else is not accepted with a different account's signature.
+            payload, signature = robin.split('.')
+            self.assertIsNone(creds.verify(owner.split('.')[0] + '.' + signature))
+            store.update('Robin', password='robin-pass-2')
+            self.assertIsNone(creds.verify(robin), 'a new password signs the account out')
+            self.assertEqual(creds.verify(owner), 'kiwibit', 'others stay signed in')
+            robin = creds.issue('Robin')
+            store.remove('Robin')
+            self.assertIsNone(creds.verify(robin), 'a removed account is signed out at once')
+            with self.assertRaises(LookupError):
+                creds.issue('Robin')
+
+    def test_account_names_passwords_and_roles_are_checked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = UserStore(Path(folder) / 'users.json')
+            for name, password, role in [('has space', 'long enough', 'member'), ('', 'long enough', 'member'),
+                                         ('robin', 'short', 'member'), ('robin', 'long enough', 'owner')]:
+                with self.assertRaises(ValueError, msg=(name, password, role)):
+                    store.add(name, password, role)
+            store.add('robin', 'long enough', 'member')
+            with self.assertRaises(KeyError):
+                store.add('ROBIN', 'long enough', 'member')
+            with self.assertRaises(LookupError):
+                store.update('nobody', role='admin')
 
     def test_secret_is_created_once_and_reused(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -76,8 +114,8 @@ class LoginApiTests(unittest.TestCase):
         (web / 'assets' / 'app.js').write_text('console.log(1)')
         self.limiter = LoginLimiter(attempts=3)
         app = create_app(JobRunner(root / 'library', root / 'downloads', root),
-                         Credentials('kiwibit', 'correct horse', b's' * 32), root / 'library', root,
-                         diagnostics=False, web=web, limiter=self.limiter)
+                         Credentials('kiwibit', 'correct horse', b's' * 32, UserStore(root / 'users.json')),
+                         root / 'library', root, diagnostics=False, web=web, limiter=self.limiter)
         self.client = TestClient(app)
         self.client.__enter__()
 
@@ -85,14 +123,14 @@ class LoginApiTests(unittest.TestCase):
         self.client.__exit__(None, None, None)
         self.temp.cleanup()
 
-    def login(self, password='correct horse', **extra):
-        return self.client.post('/api/login', json={'username': 'kiwibit', 'password': password, **extra})
+    def login(self, password='correct horse', username='kiwibit', client=None, **extra):
+        return (client or self.client).post('/api/login', json={'username': username, 'password': password, **extra})
 
     def test_app_shell_is_public_but_api_is_not(self):
         self.assertEqual(self.client.get('/').status_code, 200)
         self.assertEqual(self.client.get('/assets/app.js').status_code, 200)
         self.assertEqual(self.client.get('/api/session').json(),
-                         {'authenticated': False, 'user': None, 'auth_required': True})
+                         {'authenticated': False, 'user': None, 'role': None, 'owner': False, 'auth_required': True})
         self.assertEqual(self.client.get('/api/status').status_code, 401)
 
     def test_login_sets_a_session_cookie_that_unlocks_api_and_events(self):
@@ -148,6 +186,51 @@ class LoginApiTests(unittest.TestCase):
         import base64
         header = {'Authorization': 'Basic ' + base64.b64encode(b'kiwibit:correct horse').decode()}
         self.assertEqual(TestClient(self.client.app).get('/api/status', headers=header).status_code, 200)
+
+    def test_failed_basic_auth_counts_toward_the_lockout(self):
+        import base64
+        basic = lambda password: {'Authorization': 'Basic ' + base64.b64encode(f'kiwibit:{password}'.encode()).decode()}
+        script = TestClient(self.client.app)
+        for _ in range(3):
+            self.assertEqual(script.get('/api/status', headers=basic('guess')).status_code, 401)
+        self.assertEqual(script.get('/api/status', headers=basic('correct horse')).status_code, 401, 'locked out')
+        self.assertEqual(self.login().status_code, 429, 'the sign-in page shares the lockout')
+
+    def test_admins_manage_accounts_and_members_cannot(self):
+        self.assertEqual(self.login().status_code, 200)
+        added = self.client.post('/api/users', json={'name': 'robin', 'password': 'robin-pass-1', 'role': 'member'})
+        self.assertEqual(added.status_code, 201)
+        self.assertEqual([(a['name'], a['role'], a['owner']) for a in added.json()],
+                         [('kiwibit', 'admin', True), ('robin', 'member', False)])
+        for body, status in [({'name': 'robin', 'password': 'another-pass'}, 409), ({'name': 'KIWIBIT', 'password': 'another-pass'}, 409),
+                             ({'name': 'wren', 'password': 'short'}, 422), ({'name': 'wren', 'password': 'another-pass', 'role': 'owner'}, 422)]:
+            self.assertEqual(self.client.post('/api/users', json=body).status_code, status, body)
+        self.assertEqual(self.client.put('/api/users/kiwibit', json={'role': 'member'}).status_code, 409)
+        self.assertEqual(self.client.delete('/api/users/kiwibit').status_code, 409)
+        self.assertEqual(self.client.delete('/api/users/nobody').status_code, 404)
+
+        robin = TestClient(self.client.app)
+        self.assertEqual(self.login('robin-pass-1', 'Robin', robin).json(), {'user': 'robin'})
+        session = robin.get('/api/session').json()
+        self.assertEqual((session['user'], session['role'], session['owner']), ('robin', 'member', False))
+        self.assertEqual(robin.get('/api/status').status_code, 200, 'members use the hub')
+        self.assertEqual(robin.get('/api/users').status_code, 403, "but don't manage accounts")
+        self.assertEqual(robin.post('/api/users', json={'name': 'wren', 'password': 'another-pass'}).status_code, 403)
+
+        # Changing one's own password needs the current one, and keeps this device signed in.
+        self.assertEqual(robin.put('/api/account/password', json={'current': 'wrong', 'new': 'robin-pass-2'}).status_code, 403)
+        self.assertEqual(robin.put('/api/account/password', json={'current': 'robin-pass-1', 'new': 'robin-pass-2'}).status_code, 200)
+        self.assertEqual(robin.get('/api/status').status_code, 200)
+        self.assertEqual(self.client.put('/api/account/password', json={'current': 'correct horse', 'new': 'whatever-1'}).status_code,
+                         409, "the owner's password lives in .env")
+
+        self.client.put('/api/users/robin', json={'role': 'admin'})
+        self.assertEqual(robin.get('/api/users').status_code, 200, 'a new role applies at once')
+        self.assertEqual(robin.put('/api/users/robin', json={'role': 'member'}).status_code, 409, 'no demoting yourself')
+        self.assertEqual(robin.delete('/api/users/robin').status_code, 409, 'no removing yourself')
+        self.assertEqual(self.client.delete('/api/users/robin').status_code, 200)
+        self.assertEqual(robin.get('/api/status').status_code, 401, 'a removed account is signed out at once')
+        self.assertEqual(self.login('robin-pass-2', 'robin', TestClient(self.client.app)).status_code, 401)
 
 
 if __name__ == '__main__':

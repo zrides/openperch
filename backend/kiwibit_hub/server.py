@@ -60,6 +60,23 @@ class LoginRequest(BaseModel):
     remember: bool = True
 
 
+class NewAccount(BaseModel):
+    name: str
+    password: str
+    role: str = 'member'
+
+
+class AccountChange(BaseModel):
+    # Either or both; omitted fields stay as they are.
+    role: str | None = None
+    password: str | None = None
+
+
+class PasswordChange(BaseModel):
+    current: str
+    new: str
+
+
 class JobRequest(BaseModel):
     action: str
     ids: list[str] = Field(default_factory=list)
@@ -142,11 +159,29 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             pass  # busy: it stays pending for the next process or fetch
         return identity
 
-    def signed_in(headers, cookies):
+    def client_of(connection):
+        return connection.client.host if connection.client else 'unknown'
+
+    def signed_in(connection):
+        """The account a request or WebSocket belongs to (session cookie or HTTP Basic), or None."""
         if credentials is None:
             return 'local'
-        return credentials.verify(cookies.get(SESSION_COOKIE)) or (
-            credentials.user if credentials.check(headers.get('authorization')) else None)
+        user = credentials.verify(connection.cookies.get(SESSION_COOKIE))
+        header = connection.headers.get('authorization')
+        if user or not header:
+            return user
+        # Scripts' Basic sign-ins count toward the same lockout as the sign-in page.
+        client = client_of(connection)
+        if limiter.blocked(client):
+            return None
+        user = credentials.check(header)
+        if user is None:
+            limiter.failure(client)
+            log.warning('Failed HTTP Basic sign-in from %s', client)
+        return user
+
+    def role_of(user):
+        return 'admin' if credentials is None else credentials.role(user)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -186,15 +221,19 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             return JSONResponse({'detail': 'Cross-site request refused'}, status_code=403)
         path = request.url.path
         protected = path.startswith('/api/') or path in ('/docs', '/redoc', '/openapi.json')
-        if protected and path not in PUBLIC_API and not signed_in(request.headers, request.cookies):
-            # No WWW-Authenticate header: browsers show the app's sign-in page, not a popup.
-            return JSONResponse({'detail': 'Sign in required'}, status_code=401)
+        if protected and path not in PUBLIC_API:
+            request.state.user = signed_in(request)
+            if not request.state.user:
+                # No WWW-Authenticate header: browsers show the app's sign-in page, not a popup.
+                return JSONResponse({'detail': 'Sign in required'}, status_code=401)
         return await call_next(request)
 
     @app.get('/api/session')
     def session(request: Request):
-        user = signed_in(request.headers, request.cookies)
-        return {'authenticated': user is not None, 'user': user, 'auth_required': credentials is not None}
+        user = signed_in(request)
+        return {'authenticated': user is not None, 'user': user, 'role': role_of(user) if user else None,
+                'owner': credentials is None or (user is not None and credentials.is_owner(user)),
+                'auth_required': credentials is not None}
 
     @app.post('/api/login')
     def login(body: LoginRequest, request: Request):
@@ -205,15 +244,102 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         if wait:
             raise HTTPException(429, f'Too many failed attempts. Try again in {wait} seconds.',
                                 headers={'Retry-After': str(wait)})
-        if not credentials.verify_password(body.username.strip(), body.password):
+        user = credentials.authenticate(body.username.strip(), body.password)
+        if user is None:
             limiter.failure(client)
             log.warning('Failed sign-in from %s', client)
             raise HTTPException(401, 'Wrong username or password')
         limiter.success(client)
-        log.info('Signed in from %s', client)
-        response = JSONResponse({'user': credentials.user})
-        response.set_cookie(SESSION_COOKIE, credentials.issue(), max_age=SESSION_SECONDS if body.remember else None,
+        log.info('%s signed in from %s', user, client)
+        response = JSONResponse({'user': user})
+        set_session(response, request, user, body.remember)
+        return response
+
+    def set_session(response, request, user, remember=True):
+        response.set_cookie(SESSION_COOKIE, credentials.issue(user), max_age=SESSION_SECONDS if remember else None,
                             httponly=True, samesite='lax', secure=request.url.scheme == 'https', path='/')
+
+    def admin(request: Request):
+        """The signed-in admin, for managing accounts."""
+        if credentials is None:
+            raise HTTPException(409, 'Sign-in is turned off on this hub')
+        user = request.state.user
+        if role_of(user) != 'admin':
+            raise HTTPException(403, 'Only admins can manage accounts')
+        return user
+
+    def accounts():
+        added = credentials.users.all() if credentials.users else []
+        return ([{'name': credentials.user, 'role': 'admin', 'owner': True, 'created': None}] +
+                [{'name': a['name'], 'role': a['role'], 'owner': False, 'created': a['created']}
+                 for a in sorted(added, key=lambda a: a['name'].casefold())])
+
+    @app.get('/api/users')
+    def list_accounts(user: str = Depends(admin)):
+        return accounts()
+
+    @app.post('/api/users', status_code=201)
+    def add_account(body: NewAccount, user: str = Depends(admin)):
+        name = body.name.strip()
+        if credentials.users is None:
+            raise HTTPException(409, 'This hub keeps no added accounts')
+        if name.casefold() == credentials.user.casefold():
+            raise HTTPException(409, 'That is the owner account')
+        try:
+            credentials.users.add(name, body.password, body.role)
+        except KeyError as exc:
+            raise HTTPException(409, f'{name} already has an account') from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        log.info('Account %s (%s) added by %s', name, body.role, user)
+        return accounts()
+
+    @app.put('/api/users/{name}')
+    def change_account(name: str, body: AccountChange, user: str = Depends(admin)):
+        if credentials.is_owner(name):
+            raise HTTPException(409, "The owner account is set in the hub's .env file")
+        if body.role not in (None, 'admin') and name.casefold() == user.casefold():
+            raise HTTPException(409, "You can't take away your own admin role")
+        try:
+            credentials.users.update(name, password=body.password, role=body.role)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        log.info('Account %s changed by %s (%s)', name, user,
+                 ', '.join(part for part, given in (('role', body.role), ('password', body.password)) if given))
+        return accounts()
+
+    @app.delete('/api/users/{name}')
+    def remove_account(name: str, user: str = Depends(admin)):
+        if credentials.is_owner(name):
+            raise HTTPException(409, "The owner account is set in the hub's .env file")
+        if name.casefold() == user.casefold():
+            raise HTTPException(409, "You can't remove your own account")
+        try:
+            credentials.users.remove(name)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        log.info('Account %s removed by %s', name, user)
+        return accounts()
+
+    @app.put('/api/account/password')
+    def change_own_password(body: PasswordChange, request: Request):
+        """Any added account may change its own password; other devices are signed out."""
+        user = request.state.user
+        if credentials is None or credentials.is_owner(user):
+            raise HTTPException(409, "The owner's password is set in the hub's .env file")
+        client = client_of(request)
+        if limiter.blocked(client) or credentials.authenticate(user, body.current) is None:
+            limiter.failure(client)
+            raise HTTPException(403, 'Your current password is wrong')
+        try:
+            credentials.users.update(user, password=body.new)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        log.info('%s changed their password', user)
+        response = JSONResponse({'user': user})
+        set_session(response, request, user)  # this device stays signed in
         return response
 
     @app.post('/api/logout')
@@ -592,7 +718,7 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
 
     @app.websocket('/api/events')
     async def events(websocket: WebSocket):
-        if not same_origin(websocket.headers) or not signed_in(websocket.headers, websocket.cookies):
+        if not same_origin(websocket.headers) or not signed_in(websocket):
             await websocket.close(code=1008)
             return
         await websocket.accept()

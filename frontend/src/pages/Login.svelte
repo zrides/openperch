@@ -45,7 +45,7 @@
     </label>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <button class="btn btn-primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-    <p class="muted hint">Use the account set in the hub's <span class="mono">.env</span> file.</p>
+    <p class="muted hint">Use the owner account from the hub's <span class="mono">.env</span> file, or one an admin added for you.</p>
   </form>
 </main>
 
