@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import threading
 import unittest
@@ -28,7 +29,7 @@ class FetchTests(unittest.TestCase):
                  patch.object(cloud, 'download_one', return_value=('saved', video)) as download:
                 self.assertEqual(job.fetch(db), 0)
                 self.assertEqual([call.args[5]['startTime'] for call in download.call_args_list], [9, 1])
-                self.assertEqual(len(db.videos()), 1)
+                self.assertEqual([row['origin'] for row in db.videos()], ['cloud'])
             db.close()
 
     def test_fetch_processes_new_recordings_but_not_past_failures(self):
@@ -118,6 +119,30 @@ class FetchTests(unittest.TestCase):
                 with patch.object(running, 'fetch', return_value=0):
                     running.run()
                 self.assertEqual({Path(call.args[0]).stem for call in engine.analyze.call_args_list}, expected, action)
+            db.close()
+
+    @unittest.skipUnless(shutil.which('ffprobe'), 'needs ffprobe')
+    def test_scan_measures_card_clips_once(self):
+        import cv2
+        import numpy as np
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            day = root / 'sdcard' / 'DCIM' / '2026-09-18UTC-04-00'
+            day.mkdir(parents=True)
+            writer = cv2.VideoWriter(str(day / '2026-09-18T12-52-18PM-04-00.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), 10, (64, 48))
+            for _ in range(20):
+                writer.write(np.full((48, 64, 3), 120, dtype=np.uint8))
+            writer.release()
+            (day / '2026-09-18T12-55-00PM-04-00.mp4').write_bytes(b'no streams')
+            db = Catalog(root / 'library', root)
+            job = LibraryJob('scan', [], root, root / 'labels.txt', db.root, Mock(), media_root=root,
+                             downloads=root / 'downloads')
+            job.run()
+            lengths = {row['name']: row['duration'] for row in db.videos()}
+            self.assertAlmostEqual(lengths['2026-09-18T12-52-18PM-04-00.mp4'], 2.0, places=1)
+            # Unplayable: measured as 0, so it never stands in for a cloud clip.
+            self.assertEqual(lengths['2026-09-18T12-55-00PM-04-00.mp4'], 0)
+            self.assertEqual(db.unmeasured_card_clips(), [])
             db.close()
 
     def test_cancelled_queue_keeps_video_pending(self):

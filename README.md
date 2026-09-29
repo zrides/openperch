@@ -34,7 +34,15 @@ To add footage from the camera's SD card, move its clips (the card's own
 `DCIM` folders are fine) into `data/sdcard`, press **Add card clips** on the
 Camera page, then **Analyze waiting recordings** when you're ready for the GPU
 run. Scheduled fetches only analyze cloud recordings, never card clips.
-Duplicates of cloud recordings are not detected yet.
+**Add card clips** also reads each card clip's length from its file header.
+A cloud recording whose moment lies within card footage is then left out of
+Recordings and the Home totals in favour of the card clip: a **Show** switch
+lists the cloud copies again, and each one links to its card copy and can be
+kept in the list. Nothing is deleted. Matching needs no video decoding: the
+difference between the cloud's and the camera's clocks is measured from
+clips that start close together (Kiwibit's cloud labels read 3 s early), and
+with one camera only. Anything unclear keeps the cloud recording listed.
+`GET /api/recordings/card-copies` reports the measured offset and the count.
 - **Check the AI**: an answer key of about 150 moments you identify by eye (the
   AI's guess stays hidden), and a score comparing the AI with your answers after
   every change. The answers only measure the AI; they are never used to train it.

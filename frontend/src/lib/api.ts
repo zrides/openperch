@@ -79,6 +79,14 @@ export interface Recording {
   duration: number | null;
   /** Best photo of the recording (results path), if any. */
   cover: string | null;
+  /** How the recording reached the hub. */
+  origin: 'cloud' | 'sdcard' | 'live' | 'unknown';
+  /** For a cloud clip: the SD-card clip holding the same moment, and where in it that moment starts. */
+  covered_by: { id: string; offset_ms: number } | null;
+  /** Kept listed although the SD card holds the same moment. */
+  always_show: boolean;
+  /** Left out of lists by default: the SD card copy is shown instead. */
+  hidden: boolean;
 }
 
 export interface Evidence {

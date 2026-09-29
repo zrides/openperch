@@ -29,7 +29,7 @@ ACTIONS = ('scan', 'import', 'process', 'selected', 'reanalyze', 'reanalyze_all'
 
 
 def from_sdcard(row):
-    return row['path'].startswith(config.SDCARD_FOLDER + '/')
+    return row['origin'] == 'sdcard'
 
 
 def remaining(seconds):
@@ -121,6 +121,7 @@ class LibraryJob:
                         self.record_failure(f'Could not catalog {Path(path).name}', exc)
                     self.progress(index+1, len(paths))
                 self.changed()
+                self.measure_card_clips(db)
             if self.action != 'scan':
                 if self.action in ('selected', 'reanalyze'):
                     rows = [row for row in db.videos() if row['id'] in self.paths]
@@ -248,7 +249,7 @@ class LibraryJob:
             action = None
             try:
                 action, target = download_one(ffmpeg, ffprobe, output, manifest_path, manifest, event, 120)
-                db.ingest(target)
+                db.ingest(target, origin='cloud')
             except Cancelled:
                 raise
             except Exception as exc:
@@ -258,6 +259,22 @@ class LibraryJob:
                 self.progress(index+1, len(events))
                 self.changed()
         return failures
+
+    def measure_card_clips(self, db):
+        """Card clips' lengths, read once from each file's header, to match them with cloud clips."""
+        from .overlap import probe
+        rows = db.unmeasured_card_clips()
+        ffprobe = shutil.which('ffprobe')
+        if not rows or not ffprobe:
+            return  # without lengths, cloud copies of card clips simply stay listed
+        for index, row in enumerate(rows):
+            check_cancel(self.cancel)
+            self.message(f"Reading card clip lengths {index+1}/{len(rows)} · {row['name']}")
+            path = db.video_path(row)
+            if path.is_file():  # a missing file is measured if it comes back
+                db.set_media(row['id'], *probe(ffprobe, path))
+            self.progress(index+1, len(rows))
+        self.changed()
 
     def verify_downloads(self):
         """Explicit local integrity check; no cloud access or AI processing."""

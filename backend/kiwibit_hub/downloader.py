@@ -98,6 +98,7 @@ def manifest_record(output, target, event, duration):
         "file": str(target.relative_to(output)).replace("\\", "/"),
         "serialNumber": event.get("serialNumber"),
         "startTime": event.get("startTime"),
+        "endTime": event.get("endTime"),
         "durationSeconds": duration,
         "bytes": after.st_size,
         "mtime_ns": after.st_mtime_ns,
@@ -133,7 +134,7 @@ def verify_existing(ffprobe, output, manifest_path, manifest, target, event=None
     event = event or {}
     record = dict(prior or {}, file=relative, bytes=after.st_size,
                   mtime_ns=after.st_mtime_ns, sha256=digest, durationSeconds=duration)
-    for key in ('serialNumber', 'startTime'):
+    for key in ('serialNumber', 'startTime', 'endTime'):
         if key in event:
             record[key] = event[key]
     append_manifest(manifest_path, record)

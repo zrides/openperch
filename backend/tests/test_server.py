@@ -222,6 +222,70 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(status['job']['running'])
         self.assertEqual(status['sdcard'], {'recordings': 0, 'waiting': 0})
 
+    def add_cloud_and_card(self, card_name='2026-09-18T11-30-00PM-04-00.mp4', card_length=12.0, cameras=('camera',)):
+        import json as _json
+        folder = self.root / 'downloads' / 'camera'
+        folder.mkdir(exist_ok=True)
+        cloud = folder / '20260919T033000Z_0123456789abcdef.mp4'
+        cloud.write_bytes(b'cloud')
+        records = [{'file': f'{serial}/20260919T033000Z_0123456789abcdef.mp4', 'durationSeconds': 10, 'serialNumber': serial}
+                   for serial in cameras]
+        (self.root / 'downloads' / 'download_manifest.jsonl').write_text(''.join(_json.dumps(r) + '\n' for r in records))
+        card = self.root / 'sdcard' / 'DCIM' / card_name
+        card.parent.mkdir(parents=True, exist_ok=True)
+        card.write_bytes(b'card')
+        db = Catalog(self.library, self.root)
+        ids = db.ingest(cloud), db.ingest(card)
+        db.set_media(ids[1], card_length, None)
+        db.close()
+        return ids + (card,)
+
+    def recording(self, identity, **params):
+        return next(r for r in self.client.get('/api/recordings', params=params).json() if r['id'] == identity)
+
+    def test_cloud_clips_the_sd_card_holds_point_to_the_card_copy(self):
+        cloud, card, card_file = self.add_cloud_and_card()
+        row = self.recording(cloud)
+        self.assertEqual((row['origin'], row['covered_by'], row['always_show'], row['hidden']),
+                         ('cloud', {'id': card, 'offset_ms': 0}, False, True))
+        self.assertFalse(self.recording(card)['hidden'])
+        self.assertEqual((self.recording(card)['origin'], self.recording(card)['duration']), ('sdcard', 12.0))
+        # A search that leaves out the card clip does not change what covers what.
+        self.assertEqual(self.recording(cloud, q='20260919')['covered_by']['id'], card)
+        self.assertEqual(self.client.get('/api/recordings/card-copies').json(),
+                         {'offset_seconds': 0.0, 'pairs': 1, 'several_cameras': False, 'hidden': 1})
+        # Kept listed on request, and hidden again on request; it survives a restart (it is in the catalog).
+        self.assertEqual(self.client.put(f'/api/recordings/{cloud}/always-show', json={'value': True}).status_code, 200)
+        row = self.recording(cloud)
+        self.assertEqual((row['covered_by']['id'], row['always_show'], row['hidden']), (card, True, False))
+        self.assertEqual(self.client.get('/api/recordings/card-copies').json()['hidden'], 0)
+        self.client.put(f'/api/recordings/{cloud}/always-show', json={'value': False})
+        self.assertTrue(self.recording(cloud)['hidden'])
+        self.assertEqual(self.client.put('/api/recordings/unknown/always-show', json={'value': True}).status_code, 404)
+        # A card file that changed or disappeared no longer stands in.
+        card_file.write_bytes(b'card, edited')
+        self.assertEqual((self.recording(cloud)['covered_by'], self.recording(cloud)['hidden']), (None, False))
+        card_file.unlink()
+        self.assertEqual((self.recording(cloud)['covered_by'], self.recording(cloud)['hidden']), (None, False))
+        # Nothing was removed: both recordings are still in the library and the cloud clip plays.
+        self.assertEqual(self.client.get(f'/api/recordings/{cloud}/video').status_code, 200)
+
+    def test_cloud_clips_stay_listed_without_a_trustworthy_match(self):
+        cases = [
+            ('card starts too late', {'card_name': '2026-09-18T11-30-05PM-04-00.mp4'}),
+            ('card too short', {'card_length': 5.0}),
+            ('card unplayable', {'card_length': 0.0}),
+            ('card name without a time', {'card_name': 'clip.mp4'}),
+            ('several cameras', {'cameras': ('camera', 'other camera')}),
+        ]
+        for label, options in cases:
+            with self.subTest(label):
+                self.tearDown()
+                self.setUp()
+                cloud, _, _ = self.add_cloud_and_card(**options)
+                self.assertIsNone(self.recording(cloud)['covered_by'])
+        self.assertTrue(self.client.get('/api/recordings/card-copies').json()['several_cameras'])
+
     def test_recording_times_come_from_cloud_and_sd_card_names(self):
         from kiwibit_hub.server import recorded_at
         self.assertEqual(recorded_at('20260925T185753Z_3a88a9623053ee38.mp4'), '2026-09-25T18:57:53+00:00')

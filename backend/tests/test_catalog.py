@@ -102,6 +102,66 @@ class CatalogTests(unittest.TestCase):
             self.db.save_analysis(identity, broken, threading.Event())
         self.assertEqual(self.result_folders(), kept)
 
+    def test_origin_is_recorded_when_a_recording_joins(self):
+        self.db.close()
+        self.db = Catalog(self.root / 'library', media_root=self.root)
+        downloads = self.root / 'downloads' / 'camera'
+        downloads.mkdir(parents=True)
+        cloud = downloads / '20260919T033000Z_0123456789abcdef.mp4'
+        cloud.write_bytes(b'cloud')
+        (self.root / 'downloads' / 'download_manifest.jsonl').write_text(
+            '{"file": "camera/20260919T033000Z_0123456789abcdef.mp4", "durationSeconds": 10}\n')
+        card = self.root / 'sdcard' / '2026-09-18T11-30-00PM-04-00.mp4'
+        card.parent.mkdir()
+        card.write_bytes(b'card')
+        live = self.root / 'downloads' / 'live' / 'clip.mp4'
+        live.parent.mkdir()
+        live.write_bytes(b'live')
+        ids = {name: self.db.ingest(path) for name, path in
+               [('cloud', cloud), ('card', card), ('live', live), ('other', self.video)]}
+        ids['copy'] = self.db.ingest(self.video, copy=True)
+        origins = {row['id']: row['origin'] for row in self.db.videos()}
+        self.assertEqual({name: origins[identity] for name, identity in ids.items()},
+                         {'cloud': 'cloud', 'card': 'sdcard', 'live': 'live', 'other': 'unknown', 'copy': 'unknown'})
+        # A caller that knows better settles an unknown origin; a known one stays.
+        self.db.ingest(self.video, origin='live')
+        self.db.ingest(card, origin='cloud')
+        origins = {row['id']: row['origin'] for row in self.db.videos()}
+        self.assertEqual((origins[ids['other']], origins[ids['card']]), ('live', 'sdcard'))
+
+    def test_a_changed_card_clip_is_measured_again(self):
+        identity = self.db.ingest(self.video)
+        self.db.set_media(identity, 2.1, None)
+        self.db.ingest(self.video)
+        self.assertEqual(self.db.videos()[0]['duration'], 2.1, 'unchanged file keeps its length')
+        with self.video.open('ab') as stream:
+            stream.write(b'more')
+        self.db.ingest(self.video)
+        self.assertIsNone(self.db.videos()[0]['duration'])
+
+    def test_existing_catalog_learns_each_recordings_origin(self):
+        import sqlite3
+        folder = self.root / 'old'
+        (folder / 'library').mkdir(parents=True)
+        (folder / 'downloads').mkdir()
+        (folder / 'downloads' / 'download_manifest.jsonl').write_text('{"file": "cam/a.mp4"}\n')
+        with sqlite3.connect(folder / 'library' / 'library.sqlite3') as old:
+            old.execute('''CREATE TABLE videos (id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+                size INTEGER NOT NULL, modified INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                error TEXT NOT NULL DEFAULT '', result TEXT, added TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                gallery_version INTEGER NOT NULL DEFAULT 0, animals TEXT)''')
+            old.executemany('INSERT INTO videos(id,path,name,size,modified) VALUES(?,?,?,1,1)',
+                            [('1', 'downloads/cam/a.mp4', 'a.mp4'), ('2', 'sdcard/DCIM/b.mp4', 'b.mp4'),
+                             ('3', 'downloads/live/c.mp4', 'c.mp4'), ('4', 'downloads/d.mp4', 'd.mp4')])
+        old.close()
+        db = Catalog(folder / 'library', folder)
+        try:
+            self.assertEqual({row['id']: (row['origin'], row['duration'], row['always_show']) for row in db.videos()},
+                             {'1': ('cloud', None, 0), '2': ('sdcard', None, 0),
+                              '3': ('live', None, 0), '4': ('unknown', None, 0)})
+        finally:
+            db.close()
+
     def test_video_paths_are_relative_to_media_root(self):
         self.db.close()
         self.db = Catalog(self.root / 'library', media_root=self.root)

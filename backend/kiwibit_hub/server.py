@@ -8,12 +8,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import threading
 import urllib.error
 import urllib.parse
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -30,12 +28,9 @@ from .engine import read_labels
 from .jobs import JobRunner, from_sdcard
 from .kiwibit_api import KiwibitError
 from .live import LiveError, LiveManager
+from .overlap import coverage, estimate_offset, recorded_at, start_seconds
 from .scheduler import FetchScheduler, run_forever
 
-# Downloaded recordings are named <UTC start>_<digest>.mp4, e.g. 20260925T185753Z_3a88a9623053ee38.mp4.
-RECORDED_AT = re.compile(r'^(\d{8}T\d{6}Z)_')
-# SD-card clips are named by local start time and UTC offset, e.g. 2026-09-18T12-52-18PM-04-00.mp4.
-CARD_RECORDED_AT = re.compile(r'^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(AM|PM)([+-]\d{2})-(\d{2})')
 CLOUD_ERRORS = (OSError, KiwibitError, ValueError, KeyError)
 
 log = logging.getLogger('kiwibit_hub.server')
@@ -93,6 +88,10 @@ class FetchSettings(BaseModel):
     interval_minutes: int | None = None
 
 
+class AlwaysShow(BaseModel):
+    value: bool
+
+
 class ProcessingSettings(BaseModel):
     detector_batch: int
     classifier_batch: int
@@ -120,19 +119,6 @@ class EventHub:
         queue.put_nowait(event)
 
 
-def recorded_at(name):
-    match = RECORDED_AT.match(name)
-    if match:
-        return datetime.strptime(match.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc).isoformat()
-    card = CARD_RECORDED_AT.match(name)
-    if card:
-        date, hour, minute, second, half, zone_hours, zone_minutes = card.groups()
-        hour = int(hour) % 12 + (12 if half == 'PM' else 0)
-        local = datetime.fromisoformat(f'{date}T{hour:02d}:{minute}:{second}{zone_hours}:{zone_minutes}')
-        return local.astimezone(timezone.utc).isoformat()
-    return None
-
-
 def create_app(runner=None, credentials=None, library=None, media_root=None, diagnostics=True,
                live=None, camera=None, web=None, limiter=None, schedule_period=None):
     library = Path(library) if library is not None else config.LIBRARY
@@ -145,7 +131,7 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         """A clip recorded from live view joins the library and is identified when the hub is free."""
         db = Catalog(library, media_root)
         try:
-            identity = db.ingest(path)
+            identity = db.ingest(path, origin='live')
         finally:
             db.close()
         hub.publish('changed')
@@ -256,20 +242,55 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
     def camera_of(request: Request) -> CameraService:
         return request.app.state.camera
 
-    manifest_cache = {'mtime': None, 'durations': {}}
+    manifest_cache = {'mtime': None, 'durations': {}, 'cameras': 0}
 
-    def durations():
-        """Clip lengths from the download manifest, reloaded when it changes."""
+    def manifest():
+        """Clip lengths and the number of cameras from the download manifest, reloaded when it changes."""
         path = media_root / 'downloads' / 'download_manifest.jsonl'
         try:
             mtime = path.stat().st_mtime_ns
         except FileNotFoundError:
-            return {}
+            return {'durations': {}, 'cameras': 0}
         if manifest_cache['mtime'] != mtime:
+            records = read_manifest(path)
             manifest_cache['durations'] = {'downloads/' + name: record.get('durationSeconds')
-                                           for name, record in read_manifest(path).items()}
+                                           for name, record in records.items()}
+            manifest_cache['cameras'] = len({record.get('serialNumber') for record in records.values()} - {None})
             manifest_cache['mtime'] = mtime
-        return manifest_cache['durations']
+        return manifest_cache
+
+    def durations():
+        return manifest()['durations']
+
+    def card_copies(db, rows):
+        """({cloud id: covering card clip}, summary): cloud clips whose moment the SD card also holds."""
+        info = manifest()
+        lengths = info['durations']
+        cloud = [(row['id'], start_seconds(row['name']), lengths.get(row['path']))
+                 for row in rows if row['origin'] == 'cloud']
+        cards = {row['id']: row for row in rows if row['origin'] == 'sdcard' and (row['duration'] or 0) > 0}
+        spans = [(identity, start_seconds(row['name']) or row['started'], row['duration'])
+                 for identity, row in cards.items()]
+        offset, pairs = estimate_offset([start for _, start, _ in cloud if start is not None],
+                                        [start for _, start, _ in spans if start is not None])
+        summary = {'offset_seconds': round(offset, 2), 'pairs': pairs, 'several_cameras': info['cameras'] > 1}
+        if summary['several_cameras']:
+            # Card clips carry no camera; with several cameras a match could be another camera's.
+            return {}, summary
+        covered = coverage(cloud, spans, offset)
+        # Only a card file that is still there, unchanged since it was measured, may stand in.
+        gone = set()
+        for identity in {cover['id'] for cover in covered.values()}:
+            row = cards[identity]
+            try:
+                stat = db.video_path(row).stat()
+                if (stat.st_size, stat.st_mtime_ns) != (row['size'], row['modified']):
+                    gone.add(identity)
+            except OSError:
+                gone.add(identity)
+        if gone:
+            covered = coverage(cloud, [span for span in spans if span[0] not in gone], offset)
+        return covered, summary
 
     def video_row(db, identity):
         row = db.db.execute('SELECT * FROM videos WHERE id=?', (identity,)).fetchone()
@@ -301,14 +322,34 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
         animals = db.video_animals()
         covers = db.covers()
         lengths = durations()
-        rows = [{**{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size')},
+        videos = db.videos()
+        # Over the whole library, before any search: a search must not change what covers what.
+        copies, _ = card_copies(db, videos)
+        rows = [{**{key: row[key] for key in ('id', 'name', 'status', 'error', 'photos', 'added', 'size', 'origin')},
                  'recorded_at': recorded_at(row['name']), 'species': species.get(row['id'], []),
                  'animals': animals.get(row['id'], []),
-                 'duration': lengths.get(row['path']), 'cover': covers.get(row['id'])}
-                for row in db.videos() if text in (row['name'] + ' ' + row['status']).casefold()]
+                 'duration': lengths.get(row['path']) or row['duration'] or None, 'cover': covers.get(row['id']),
+                 'covered_by': copies.get(row['id']), 'always_show': bool(row['always_show']),
+                 'hidden': row['id'] in copies and not row['always_show']}
+                for row in videos if text in (row['name'] + ' ' + row['status']).casefold()]
         # Newest recording first; imported files without a timestamp go last.
         rows.sort(key=lambda row: row['recorded_at'] or '', reverse=True)
         return rows[:limit] if limit > 0 else rows
+
+    @app.get('/api/recordings/card-copies')
+    def card_copy_summary(db: Catalog = Depends(catalog)):
+        """How cloud clips were matched with SD-card clips: the measured clock offset and the count."""
+        videos = db.videos()
+        copies, summary = card_copies(db, videos)
+        return {**summary, 'hidden': sum(row['id'] in copies and not row['always_show'] for row in videos)}
+
+    @app.put('/api/recordings/{identity}/always-show')
+    def always_show(identity: str, body: AlwaysShow, db: Catalog = Depends(catalog)):
+        """Keep a cloud clip listed even when the SD card holds the same moment."""
+        video_row(db, identity)
+        db.set_always_show(identity, body.value)
+        hub.publish('changed')
+        return {'id': identity, 'always_show': body.value}
 
     @app.get('/api/recordings/{identity}/sightings')
     def recording_sightings(identity: str, db: Catalog = Depends(catalog)):

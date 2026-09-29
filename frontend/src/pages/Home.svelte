@@ -37,13 +37,17 @@
   const now = new Date();
   const todayStart = startOfDay(now).getTime();
 
-  const dated = $derived(recordings.filter((r) => r.recorded_at));
+  // A cloud clip the SD card also holds counts once, as the card clip, once the card clip is
+  // analyzed; until then the cloud clip is the only bird evidence for that moment.
+  const byId = $derived(new Map(recordings.map((r) => [r.id, r])));
+  const counted = $derived(recordings.filter((r) => !r.hidden || byId.get(r.covered_by!.id)?.status !== 'ready'));
+  const dated = $derived(counted.filter((r) => r.recorded_at));
   const today = $derived(dated.filter((r) => new Date(r.recorded_at!).getTime() >= todayStart));
-  const latest = $derived(recordings.slice(0, 4));
+  const latest = $derived(counted.slice(0, 4));
   const identifiedSpecies = $derived(species.filter((s) => s.species !== UNCERTAIN));
   const photos = $derived(species.reduce((sum, s) => sum + s.photos, 0));
-  const needsReview = $derived(recordings.filter((r) => r.species.includes(UNCERTAIN)).length);
-  const processing = $derived(recordings.filter((r) => r.status !== 'ready' && r.status !== 'failed').length);
+  const needsReview = $derived(counted.filter((r) => r.species.includes(UNCERTAIN)).length);
+  const processing = $derived(counted.filter((r) => r.status !== 'ready' && r.status !== 'failed').length);
   const range = $derived(dated.length
     ? `${new Date(dated[dated.length - 1].recorded_at!).toLocaleDateString([], { day: 'numeric', month: 'short' })} – ${new Date(dated[0].recorded_at!).toLocaleDateString([], { day: 'numeric', month: 'short' })}`
     : '');
@@ -66,7 +70,7 @@
 
   const top = $derived.by(() => {
     const counts = new Map<string, number>();
-    for (const r of recordings) for (const name of new Set(r.species)) if (name !== UNCERTAIN) counts.set(name, (counts.get(name) ?? 0) + 1);
+    for (const r of counted) for (const name of new Set(r.species)) if (name !== UNCERTAIN) counts.set(name, (counts.get(name) ?? 0) + 1);
     const rows = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 7);
     const max = Math.max(1, ...rows.map(([, count]) => count));
     return rows.map(([name, count]) => ({ name, count, width: (count / max) * 100 }));
@@ -155,7 +159,7 @@
   <section class="tiles" aria-label="Library totals">
     <div class="card tile">
       <span class="eyebrow">Recordings</span>
-      <span class="serif value">{recordings.length.toLocaleString()}</span>
+      <span class="serif value">{counted.length.toLocaleString()}</span>
       <span class="muted">{today.length} today{range ? ` · ${range}` : ''}</span>
     </div>
     <div class="card tile">

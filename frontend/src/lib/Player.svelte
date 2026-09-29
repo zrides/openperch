@@ -162,12 +162,26 @@
     }
   }
 
+  // Whether a cloud clip the SD card also holds stays in the list. The hub announces the
+  // change, which reloads the list and this recording.
+  async function setAlwaysShow(value: boolean) {
+    notice = '';
+    try {
+      await api.put(`/api/recordings/${recording.id}/always-show`, { value });
+    } catch (e) {
+      notice = String((e as Error).message ?? e);
+    }
+  }
+
+  const ORIGINS: Record<string, string> = { cloud: 'cloud', sdcard: 'SD card', live: 'live view' };
+
   // A saved correction bumps hub.changed, which reloads the labels above.
   function closeCorrection() {
     correcting = null;
   }
 
   const meta = $derived([
+    ORIGINS[recording.origin],
     duration(recording.duration),
     analysis && `${analysis.width} × ${analysis.height}`,
     analysis && `${analysis.fps.toFixed(2)} fps`,
@@ -198,6 +212,16 @@
     </div>
   </header>
   {#if notice}<p class="notice" aria-live="polite">{notice}</p>{/if}
+  {#if recording.covered_by}
+    <p class="copy">
+      <span>{recording.always_show ? 'The SD card has this moment too. You chose to keep this cloud copy in the list.'
+        : 'The SD card has this moment too, so this cloud copy is left out of the list.'}</span>
+      <a href="#/recordings/{recording.covered_by.id}?t={recording.covered_by.offset_ms}">Watch the SD card copy</a>
+      <button type="button" class="link" onclick={() => setAlwaysShow(!recording.always_show)}>
+        {recording.always_show ? 'Leave it out of the list' : 'Keep it in the list'}
+      </button>
+    </p>
+  {/if}
   {#if recording.status === 'failed' && recording.error}<p class="error">{recording.error}</p>{/if}
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
@@ -317,6 +341,13 @@
   h2 { margin: 0; font-size: 26px; font-weight: 600; }
   .meta { margin: 4px 0 0; font-size: 14px; }
   .head-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .copy {
+    margin: 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line-soft); background: var(--card); font-size: 14px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  }
+  .copy span { flex-basis: 100%; }
+  .copy a, .copy .link { font-weight: 600; }
+  .link { padding: 0; border: none; background: none; color: var(--spruce); font: inherit; cursor: pointer; text-decoration: underline; }
   .notice { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--spruce-soft); color: var(--spruce); font-size: 14px; }
   .error { margin: 0; padding: 10px 14px; border-radius: 12px; background: #F7E1DA; color: #7A2A18; font-size: 14px; }
 

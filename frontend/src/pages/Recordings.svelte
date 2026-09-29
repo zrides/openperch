@@ -44,6 +44,26 @@
     }
   }
 
+  // Cloud clips whose footage is also on the SD card are left out unless asked for on this device.
+  const COPIES_KEY = 'kiwibit.recordings.cloudCopies';
+  let showCopies = $state(readShowCopies());
+  function readShowCopies(): boolean {
+    try {
+      return localStorage.getItem(COPIES_KEY) === 'shown';
+    } catch {
+      return false;
+    }
+  }
+  function toggleCopies() {
+    showCopies = !showCopies;
+    shownCount = PAGE;
+    try {
+      localStorage.setItem(COPIES_KEY, showCopies ? 'shown' : 'hidden');
+    } catch {
+      /* storage unavailable: remember for this visit only */
+    }
+  }
+
   async function load() {
     try {
       recordings = await api.get<Recording[]>('/api/recordings');
@@ -83,7 +103,9 @@
     return text.split(/\s+/).every((word) => haystack.includes(word));
   }
 
-  const filtered = $derived(recordings.filter(matches));
+  const copies = $derived(recordings.filter((r) => r.hidden).length);
+  const library = $derived(showCopies ? recordings : recordings.filter((r) => !r.hidden));
+  const filtered = $derived(library.filter(matches));
   const listed = $derived(day ? filtered.filter((r) => dayKey(r.recorded_at) === day) : filtered);
   const groups = $derived.by(() => {
     const result: { key: string; label: string; items: Recording[] }[] = [];
@@ -124,13 +146,17 @@
   // Without a selection on a wide screen, open the newest recording.
   const selected = $derived(recordings.find((r) => r.id === id) ?? null);
   $effect(() => {
-    if (!id && recordings.length && matchMedia('(min-width: 861px)').matches) {
-      history.replaceState(null, '', `#/recordings/${recordings[0].id}`);
+    if (!id && library.length && matchMedia('(min-width: 861px)').matches) {
+      history.replaceState(null, '', `#/recordings/${library[0].id}`);
       dispatchEvent(new HashChangeEvent('hashchange'));
     }
   });
 
   function chips(r: Recording) {
+    const status = statusChips(r);
+    return r.hidden ? [{ text: 'Cloud copy', kind: 'plain' }, ...status] : status;
+  }
+  function statusChips(r: Recording) {
     if (r.status === 'failed') return [{ text: 'Processing failed', kind: 'error' }];
     if (r.status !== 'ready') return [{ text: r.status === 'processing' ? 'Processing…' : 'Not processed', kind: 'plain' }];
     const animals = r.animals.map((text) => ({ text, kind: 'animal' }));
@@ -148,7 +174,7 @@
     <div class="list-head">
       <div class="title-row">
         <h1 class="serif">Recordings</h1>
-        <span class="mono muted">{recordings.length}</span>
+        <span class="mono muted">{library.length}</span>
       </div>
       <label class="search">
         <span class="visually-hidden">Search recordings</span>
@@ -163,6 +189,12 @@
           <Icon name="calendar" size={16} />Calendar
         </button>
       </div>
+      {#if copies}
+        <div class="copies">
+          <span>{copies.toLocaleString()} cloud {copies === 1 ? 'copy' : 'copies'} {showCopies ? 'shown' : 'hidden'}: the SD card has the same footage.</span>
+          <button type="button" onclick={toggleCopies}>{showCopies ? 'Hide' : 'Show'}</button>
+        </div>
+      {/if}
       {#if calendarOpen}
         <div id="recordings-calendar">
           <DayCalendar {days} selected={day} onselect={pickDay} />
@@ -183,7 +215,7 @@
           <a class="item" href="#/recordings/{r.id}" aria-current={r.id === id ? 'true' : undefined}>
             <span class="item-row">
               <span class="mono when">{timeOfDay(r.recorded_at) || r.name}</span>
-              <span class="mono muted small">{duration(r.duration)}</span>
+              <span class="mono muted small">{r.origin === 'sdcard' ? 'SD · ' : ''}{duration(r.duration)}</span>
             </span>
             <span class="chips">
               {#each chips(r) as chip (chip.text)}
@@ -226,7 +258,11 @@
   h1 { margin: 0; font-size: 26px; font-weight: 600; }
   .filters .calendar-toggle { margin-left: auto; color: var(--spruce); }
   .filters .calendar-toggle[aria-expanded='true'] { background: var(--spruce-soft); border-color: var(--spruce-soft); }
-  .calendar-toggle, .day-filter button {
+  .copies {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 13px; color: var(--muted);
+  }
+  .calendar-toggle, .day-filter button, .copies button {
     display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px;
     border: 1px solid var(--control-line); background: var(--card); color: var(--spruce);
     font-size: 13px; font-weight: 600; cursor: pointer;

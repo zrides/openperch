@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import config
 from .cancel import Cancelled, check_cancel
+from .overlap import origin_of, read_cloud_files
 from .sightings import (SMART_VERSION, UNCERTAIN, animal_tag, best_photos, collect_sightings, other_animals,
                         photo_quality, sighting_matches, summarize)
 from .tracking import NONBIRD_LABELS
@@ -57,6 +58,7 @@ class Catalog:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.root / "library.sqlite3", timeout=30, check_same_thread=check_same_thread)
         self.db.row_factory = sqlite3.Row
+        self._cloud = (None, set())  # (manifest mtime, cloud_files())
         if migrate:
             self._migrate()
 
@@ -104,6 +106,16 @@ class Catalog:
                 # Other animals seen (JSON list of tags); NULL until the analysis is read.
                 self.db.execute('ALTER TABLE videos ADD COLUMN animals TEXT')
                 self._tag_animals()
+            if 'origin' not in video_columns:
+                # cloud, sdcard, live or unknown (see overlap.py); card clips also get their
+                # length (0: unplayable) and, when the name has no time, the file's creation time.
+                # always_show keeps a cloud clip listed even when the card holds the same moment.
+                for name, declaration in [('origin', 'TEXT'), ('duration', 'REAL'), ('started', 'REAL'),
+                                          ('always_show', 'INTEGER NOT NULL DEFAULT 0')]:
+                    self.db.execute(f'ALTER TABLE videos ADD COLUMN {name} {declaration}')
+                cloud = self.cloud_files()
+                for identity, path in self.db.execute('SELECT id, path FROM videos').fetchall():
+                    self.db.execute('UPDATE videos SET origin=? WHERE id=?', (origin_of(path, cloud), identity))
             photo_columns = {r[1] for r in self.db.execute('PRAGMA table_info(photos)')}
             for name, declaration in [('sighting_id', 'TEXT'), ('quality', 'REAL NOT NULL DEFAULT 0'),
                                       ('featured', 'INTEGER NOT NULL DEFAULT 1')]:
@@ -125,6 +137,17 @@ class Catalog:
     def close(self):
         self.db.close()
 
+    def cloud_files(self):
+        """Downloads the cloud manifest vouches for; reread only when the manifest changes (a scan ingests many)."""
+        manifest = self.media_root / 'downloads' / 'download_manifest.jsonl'
+        try:
+            mtime = manifest.stat().st_mtime_ns
+        except OSError:
+            return set()
+        if self._cloud[0] != mtime:
+            self._cloud = (mtime, read_cloud_files(manifest))
+        return self._cloud[1]
+
     def stored_path(self, path):
         path = Path(path).resolve()
         try:
@@ -140,7 +163,7 @@ class Catalog:
         with self.db:
             self.db.execute("UPDATE videos SET status='pending', error='Interrupted; ready to resume' WHERE status='processing'")
 
-    def ingest(self, source, copy=False, cancel=None):
+    def ingest(self, source, copy=False, cancel=None, origin=None):
         source = Path(source).resolve()
         if source.suffix.lower() not in EXTENSIONS or ".part." in source.name or not source.stat().st_size:
             raise ValueError("Choose a completed, nonempty video")
@@ -173,15 +196,20 @@ class Catalog:
         stat = source.stat()
         stored = self.stored_path(source)
         identity = hashlib.sha256(stored.casefold().encode()).hexdigest()
+        origin = origin or origin_of(stored, self.cloud_files())
         with self.db:
             existing = self.db.execute("SELECT * FROM videos WHERE id=?", (identity,)).fetchone()
             if existing and (existing['size'], existing['modified']) != (stat.st_size, stat.st_mtime_ns):
                 self.db.execute("DELETE FROM photos WHERE video_id=?", (identity,))
                 self.db.execute('UPDATE sightings SET active=0 WHERE video_id=?', (identity,))
-                self.db.execute("UPDATE videos SET status='pending', result=NULL, gallery_version=0, animals=NULL, error='', size=?, modified=? WHERE id=?",
+                self.db.execute('''UPDATE videos SET status='pending', result=NULL, gallery_version=0, animals=NULL, error='',
+                                   duration=NULL, started=NULL, size=?, modified=? WHERE id=?''',
                                 (stat.st_size, stat.st_mtime_ns, identity))
-            self.db.execute("INSERT OR IGNORE INTO videos(id,path,name,size,modified) VALUES(?,?,?,?,?)",
-                            (identity, stored, original_name, stat.st_size, stat.st_mtime_ns))
+            self.db.execute("INSERT OR IGNORE INTO videos(id,path,name,size,modified,origin) VALUES(?,?,?,?,?,?)",
+                            (identity, stored, original_name, stat.st_size, stat.st_mtime_ns, origin))
+            if origin != 'unknown':
+                self.db.execute("UPDATE videos SET origin=? WHERE id=? AND COALESCE(origin, 'unknown')='unknown'",
+                                (origin, identity))
         if existing and existing['result'] and (existing['size'], existing['modified']) != (stat.st_size, stat.st_mtime_ns):
             self._remove_result_folder(self.root / Path(existing['result']).parent)
         return identity
@@ -220,6 +248,17 @@ class Catalog:
         # SQLite returns the row holding max(quality) for bare columns.
         return {video_id: path for video_id, path, _ in self.db.execute(
             'SELECT video_id, path, max(quality) FROM photos GROUP BY video_id')}
+
+    def unmeasured_card_clips(self):
+        return self.db.execute("SELECT * FROM videos WHERE origin='sdcard' AND duration IS NULL ORDER BY name").fetchall()
+
+    def set_media(self, identity, duration, started):
+        with self.db:
+            self.db.execute('UPDATE videos SET duration=?, started=? WHERE id=?', (duration, started, identity))
+
+    def set_always_show(self, identity, value):
+        with self.db:
+            self.db.execute('UPDATE videos SET always_show=? WHERE id=?', (int(bool(value)), identity))
 
     def state(self, identity, status, error=""):
         with self.db:
