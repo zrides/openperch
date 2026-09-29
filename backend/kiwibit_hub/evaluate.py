@@ -31,11 +31,14 @@ from .tracking import NONBIRD_LABELS
 # 'baseline' is tracker v2 with a view per second, as deployed before stitching.
 # 'exclude' drops species from the saved rankings, as a shorter species list would.
 VARIANTS = {
-    'baseline': {'tracking.STITCH_MAX_GAP_MS': 0, 'sightings.VIEW_GAP_MS': 1000},
-    'stitch': {'sightings.VIEW_GAP_MS': 1000},
-    'dense': {'tracking.STITCH_MAX_GAP_MS': 0},
-    'stitch+dense': {},
-    'stitch+dense-carolina': {'exclude': frozenset({'Carolina chickadee'})},
+    'baseline': {'tracking.STITCH_MAX_GAP_MS': 0, 'tracking.STILL_MAX_GAP_MS': 0, 'sightings.VIEW_GAP_MS': 1000},
+    'stitch': {'tracking.STILL_MAX_GAP_MS': 0, 'sightings.VIEW_GAP_MS': 1000},
+    'dense': {'tracking.STITCH_MAX_GAP_MS': 0, 'tracking.STILL_MAX_GAP_MS': 0},
+    'stitch+dense': {'tracking.STILL_MAX_GAP_MS': 0},
+    'stitch+dense-carolina': {'tracking.STILL_MAX_GAP_MS': 0, 'exclude': frozenset({'Carolina chickadee'})},
+    # A still bird the detector misses for up to this long stays one sighting; 'still' is the current code.
+    'still5': {'tracking.STILL_MAX_GAP_MS': 5000},
+    'still': {},
 }
 MODULES = {'tracking': tracking, 'sightings': sightings, 'review': review}
 

@@ -6,9 +6,10 @@ bird recognition. Raw frame predictions are always retained separately.
 from collections import defaultdict
 import math
 
+from . import tracking
 from .engine import iou
 
-SMART_VERSION = 6
+SMART_VERSION = 7
 UNCERTAIN = 'Uncertain bird'
 # Species views are sampled at least this far apart within a sighting. The engine
 # classifies each track every 500 ms, so this uses every classification.
@@ -55,11 +56,14 @@ def collect_sightings(frames):
             group = active.get(track)
             # Tracking time, in which a camera dropout is a pause (see tracking.PauseClock).
             now = frame.get('clock', frame['ms'])
-            if group is None or now - group['clock'] > 1500:
+            # A bird that stayed where it was (see tracking.STILL_MAX_GAP_MS) is still the same visit.
+            still = (group is not None and now - group['clock'] <= tracking.STILL_MAX_GAP_MS
+                     and tracking.overlap(group['box'], animal['box']) >= tracking.STILL_MIN_OVERLAP)
+            if group is None or (now - group['clock'] > 1500 and not still):
                 group = {'track': track, 'start_ms': frame['ms'], 'end_ms': frame['ms'], 'views': []}
                 groups.append(group)
                 active[track] = group
-            group['end_ms'], group['clock'] = frame['ms'], now
+            group['end_ms'], group['clock'], group['box'] = frame['ms'], now, animal['box']
             # Sample independent moments instead of counting repeated frame ranks.
             if animal.get('tracking_state') != 'weak' and (not group['views'] or frame['ms'] - group['views'][-1]['ms'] >= VIEW_GAP_MS):
                 last_photo = next((view['ms'] for view in reversed(group['views']) if view['photo']), None)

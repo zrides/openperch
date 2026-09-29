@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 
-TRACKER_VERSION = 5
+TRACKER_VERSION = 6
 HIGH_CONFIDENCE = .22
 LOW_CONFIDENCE = .10
 MAX_GAP_MS = 1200
@@ -27,6 +27,11 @@ CLASSIFIER_WEIGHT = .75
 STITCH_MAX_GAP_MS = 1500
 STITCH_MAX_SIZE_RATIO = 6
 STITCH_MIN_SCORE = .55
+# A bird sitting still that the detector misses for a few seconds: a longer gap is allowed when
+# the piece after it starts where the piece before it ended (box overlap). Close-ups on the rim
+# are missed for 2-7 s at a time; on the answer key, 8 s took uncertain 19% -> 13%, wrong unchanged.
+STILL_MAX_GAP_MS = 8000
+STILL_MIN_OVERLAP = .5
 # A camera dropout: no frames for this many frame times, and at least this long.
 DROPOUT_FRAMES = 4
 DROPOUT_MS = 300
@@ -192,7 +197,8 @@ def stitch_score(earlier, later):
     _, end_ms, last = earlier['last']
     _, start_ms, first = later['first']
     gap = start_ms-end_ms
-    if not 0 < gap <= STITCH_MAX_GAP_MS:
+    still = overlap(last['box'], first['box']) >= STILL_MIN_OVERLAP
+    if not 0 < gap <= (max(STITCH_MAX_GAP_MS, STILL_MAX_GAP_MS) if still else STITCH_MAX_GAP_MS):
         return -1.
     # Each piece's best species guess must be among the other's top three: never join a
     # chickadee that left to a titmouse or nuthatch that arrived, or a bird to a squirrel.

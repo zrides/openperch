@@ -192,10 +192,26 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(sorted(map(sorted, tracks.values())), [['left'], ['right']])
 
     def test_late_or_distant_starts_are_not_stitched(self):
-        for first, later, gap in [([detection(.2)], [detection(.21)], 1700), ([detection(.2)], [detection(.5)], 500)]:
+        # Late: past the brief-miss limit and moved off the spot, or past the still-bird limit.
+        for first, later, gap in [([detection(.2)], [detection(.28)], 1700), ([detection(.2)], [detection(.21)], 9000),
+                                  ([detection(.2)], [detection(.5)], 500)]:
             tracker, frames = self.split_by_a_miss(first, later, gap)
             tracker.finalize(frames)
             self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2, (later[0]['box'], gap))
+
+    def test_a_still_bird_missed_for_seconds_stays_one_sighting(self):
+        # A finch sits on the rim while the detector misses it for 4 s: one track and one sighting,
+        # but only where it was, and only within the allowed gap.
+        for later, gap, tracks in [(detection(.21), 4000, 1), (detection(.28), 4000, 2), (detection(.21), 9000, 2)]:
+            tracker, frames = self.split_by_a_miss([detection(.2)], [later], gap)
+            tracker.finalize(frames)
+            self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), tracks, (later['box'], gap))
+            if tracks == 1:  # a one-frame first piece is no sighting of its own
+                self.assertEqual(len(collect_sightings(frames)), 1, gap)
+        with patch('kiwibit_hub.tracking.STILL_MAX_GAP_MS', 0):
+            tracker, frames = self.split_by_a_miss([detection(.2)], [detection(.21)], 4000)
+            tracker.finalize(frames)
+            self.assertEqual(len({a['id'] for f in frames for a in f['animals']}), 2, 'turned off')
 
     def test_retracking_a_stitched_result_stitches_it_the_same_way(self):
         tracker, frames = self.split_by_a_miss([detection(.2, appearance=[1., 0.])], [detection(.21, appearance=[1., 0.])])

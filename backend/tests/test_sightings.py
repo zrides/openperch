@@ -59,7 +59,10 @@ class SightingLogicTests(unittest.TestCase):
         # 21 frames give one view per classification (500 ms), not 21 votes; a photo per second.
         self.assertEqual([len(g['views']) for g in groups], [5, 5])
         self.assertEqual([sum(v['photo'] for v in g['views']) for g in groups], [3, 3])
+        # Back where it was 3 s later: the same visit (a still bird the detector missed); 10 s later: a new one.
         frames.append({'ms': 5000, 'animals': [view(track=1)['animal']]})
+        self.assertEqual(len(collect_sightings(frames)), 2)
+        frames.append({'ms': 15000, 'animals': [view(track=1)['animal']]})
         self.assertEqual(len(collect_sightings(frames)), 3)
 
     def test_quality_favors_sharp_larger_unclipped_crops(self):
