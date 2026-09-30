@@ -26,7 +26,7 @@ services:
       KIWIBIT_DETECTOR: ${KIWIBIT_DETECTOR:-yolov8x-worldv2.pt}
     volumes:
       - ${KIWIBIT_DATA_DIR:-./data}:/data
-      - ${KIWIBIT_BIOCLIP_DIR:-../bioclip-2.5-vith14}:/models/bioclip:ro
+      - ${KIWIBIT_BIOCLIP_DIR:-./data/models/bioclip-2.5-vith14}:/models/bioclip:ro
     secrets:
       - kiwibit_account
     gpus: all
@@ -35,4 +35,4 @@ services:
 secrets:
   # The Kiwibit account token. Mounted read-only; never copied into the image or data.
   kiwibit_account:
-    file: ${KIWIBIT_ACCOUNT_CONFIG:-../kiwibit-analysis/kiwibit-viewer/config.json}
+    file: ${KIWIBIT_ACCOUNT_CONFIG:-./secrets/kiwibit-account.json}

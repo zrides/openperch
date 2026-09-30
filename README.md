@@ -23,6 +23,7 @@ reports are welcome.
 | `backend/` | Python package `kiwibit_hub`: API server, jobs, scheduler, AI pipeline, catalog, cloud downloader |
 | `live/` | Go WebRTC client; `cmd/relay` re-serves the camera's live stream to browsers |
 | `data/` | Runtime data, git-ignored: `library/`, `downloads/`, `sdcard/`, `cache/`, `models/`, `logs/` |
+| `secrets/` | Your Kiwibit account file, git-ignored (see Set up) |
 
 ## Pages
 
@@ -62,18 +63,81 @@ unclear keeps the cloud recording listed.
   and young birds where the article has them, next to the moments you have
   already identified; the browser loads these photos from Wikipedia.
 
-## Run with Docker
+## Set up
 
 Requirements: Docker with the NVIDIA container runtime (Docker Desktop on WSL2
-works) and an NVIDIA driver supporting CUDA 12.8.
+works on Windows), an NVIDIA GPU with about 6 GB of free memory and a driver
+supporting CUDA 12.8, a Kiwibit camera with cloud recording, and about 10 GB of
+disk for the models plus room for your recordings.
 
-```powershell
-Copy-Item .env.example .env   # then set KIWIBIT_HUB_PASSWORD and KIWIBIT_LIVE_HOSTS
+### 1. Download BioCLIP 2.5
+
+OpenPerch names species with [BioCLIP 2.5](https://huggingface.co/imageomics/bioclip-2.5-vith14)
+(MIT license). It needs two files from that page, about 4 GB in all:
+
+```bash
+mkdir -p data/models/bioclip-2.5-vith14
+cd data/models/bioclip-2.5-vith14
+curl -LO https://huggingface.co/imageomics/bioclip-2.5-vith14/resolve/main/open_clip_config.json
+curl -LO https://huggingface.co/imageomics/bioclip-2.5-vith14/resolve/main/open_clip_model.safetensors
+```
+
+(In Windows PowerShell, create the folder with `mkdir` and use `curl.exe` in
+place of `curl`.) The YOLO-World detector downloads itself on first use.
+
+### 2. Connect your Kiwibit account
+
+OpenPerch talks to the Kiwibit cloud as your own Kiwibit app does, so it needs
+your account's session token and a few details the app sends with every
+request. Kiwibit has no public API or developer sign-up, so the way to get them
+is to watch your own app's traffic once with an HTTPS proxy such as
+[mitmproxy](https://mitmproxy.org):
+
+1. Run `mitmweb` on your computer and set your phone's Wi-Fi proxy to that
+   computer, port 8080.
+2. On the phone, open <http://mitm.it>, install the mitmproxy certificate and
+   trust it (on iPhone: Settings → General → About → Certificate Trust Settings).
+3. Open the Kiwibit app, let the camera list load, and start live view once.
+4. In mitmweb, find the requests to `api-us.kiwibit.com` (or your region's host).
+5. Afterwards, remove the proxy setting and the certificate from the phone.
+
+Create `secrets/kiwibit-account.json` (the `secrets/` folder is git-ignored):
+
+```json
+{
+  "baseUrl": "https://api-us.kiwibit.com",
+  "token": "<Authorization header of any request, without the word Bearer>",
+  "userDeviceId": "<userDeviceId from any request body>",
+  "userDeviceName": "<userDeviceName from any request body>",
+  "defaultSerialNumber": "<your camera's serialNumber>",
+  "app": { "<the whole app object from any request body>": "" },
+  "webrtcApp": { "<the whole app object from the getWebrtcTicket request body (live view)>": "" }
+}
+```
+
+`defaultSerialNumber` picks the camera for the Camera and Live pages when the
+account has several. **Keep this file private: the token gives full access to
+your Kiwibit account.** It is mounted read-only into the container and never
+copied into the image or `data/`. When the token expires or you sign out of
+the app, capture a new one.
+
+### 3. Configure and start
+
+```bash
+cp .env.example .env    # PowerShell: Copy-Item .env.example .env
+```
+
+In `.env`, set `KIWIBIT_HUB_PASSWORD` to a long random password, then:
+
+```bash
 docker compose up -d --build
 ```
 
-Open <http://127.0.0.1:8765> and sign in with the `.env` credentials. The
-interactive API is at `/docs`.
+Open <http://127.0.0.1:8765> and sign in as `admin` with that password. The
+first build takes a while (PyTorch with CUDA is several GB). The interactive
+API is at `/docs`.
+
+### Use it from your phone
 
 To use it from a phone on your network, set in `.env`:
 
@@ -84,12 +148,13 @@ KIWIBIT_LIVE_HOSTS=<this PC's LAN address>,127.0.0.1
 
 Use a VPN such as Tailscale rather than exposing the hub to the internet.
 
+### Paths and models
+
 `compose.yaml` mounts, relative to this folder:
 
 - `./data` → `/data`: the library and downloads (read-write).
-- `../bioclip-2.5-vith14` → `/models/bioclip`: the BioCLIP weights (read-only).
-- `../kiwibit-analysis/kiwibit-viewer/config.json`: the account token, as a
-  read-only Docker secret. It is never copied into the image or `data/`.
+- `./data/models/bioclip-2.5-vith14` → `/models/bioclip`: the BioCLIP weights (read-only).
+- `./secrets/kiwibit-account.json`: the account file, as a read-only Docker secret.
 
 Override any of these in `.env`. The YOLO-World detector downloads into
 `data/models` on first use if it is not already there. It is the extra-large
