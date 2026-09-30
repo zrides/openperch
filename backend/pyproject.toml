@@ -2,6 +2,7 @@
 name = "kiwibit-hub"
 version = "0.1.0"
 description = "Self-hosted Kiwibit camera hub: cloud recordings, bird identification, library."
+license = "AGPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -21,7 +22,7 @@ ml = [
 dev = ["httpx2"]
 
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

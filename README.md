@@ -221,5 +221,25 @@ with "disk I/O error".
   hub stops.
 - Species results are AI predictions. Match values are cosine similarities,
   not probabilities. Corrections relabel a sighting; they don't retrain the model.
-- Ultralytics (YOLO-World) is AGPL-3.0. Keep that in mind before distributing
-  or offering the hub to others.
+
+## License
+
+Copyright (c) 2026 Zach Rideout.
+
+Kiwibit Hub is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3
+(`AGPL-3.0-only`), as published by the Free Software Foundation. It comes with
+no warranty. See [LICENSE](LICENSE).
+
+The AGPL's network clause applies too: if you run a modified hub for other
+people, offer them its source code.
+
+Third-party parts:
+
+- `live/` is adapted from [bbielsa/vicostream](https://github.com/bbielsa/vicostream),
+  which does not state a license. Those parts remain their author's work and
+  are not covered by this project's license; they will be removed on request.
+- Detection uses [Ultralytics](https://github.com/ultralytics/ultralytics)
+  (YOLO-World), itself AGPL-3.0. The hub as a whole runs under its terms.
+- Model weights (YOLO-World, BioCLIP) are downloaded separately and keep their
+  own licenses. Field-guide photos load from Wikipedia under theirs.

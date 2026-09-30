@@ -57,6 +57,7 @@ RUN pip install --no-deps . \
     && chown hub:hub /data
 COPY --from=relay /out/kiwibit-relay /usr/local/bin/kiwibit-relay
 COPY --from=web /web/dist /app/web
+COPY LICENSE /app/LICENSE
 
 USER hub
 EXPOSE 8000
