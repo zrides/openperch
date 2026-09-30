@@ -44,13 +44,31 @@ class CatalogTests(unittest.TestCase):
         for _ in range(2):
             self.db.save_analysis(identity, self.result, threading.Event())
         self.assertEqual(self.db.videos()[0]['status'], 'ready')
-        self.assertEqual([p['ms'] for p in self.db.photos('Northern cardinal')], [0, 1000, 2000])
+        self.assertEqual([p['ms'] for p in self.db.photos('Northern cardinal')], [2000, 1000, 0])
         self.assertEqual(len(self.db.result(identity)['frames']), 21)
         for photo in self.db.photos('Northern cardinal'):
             self.assertTrue((self.db.root / photo['path']).is_file())
         self.db.close()
         self.db = Catalog(self.root / 'library')
         self.assertEqual(self.db.species()[0]['photos'], 3)
+
+    def test_gallery_is_newest_first_before_pagination(self):
+        names = ['20260925T120000Z_old.avi', '2026-09-26T01-00-00PM-04-00.avi',
+                 '20260926T160000Z_middle.avi', 'unknown.avi']
+        for index, name in enumerate(names):
+            video = self.root / name
+            video.write_bytes(self.video.read_bytes())
+            identity = self.db.ingest(video)
+            self.db.save_analysis(identity, self.result, threading.Event())
+            # Quality must not outrank the recording date.
+            self.db.db.execute('UPDATE photos SET quality=?, featured=1 WHERE video_id=?',
+                               (100 - index, identity))
+        expected = [(name, ms) for name in [names[1], names[2], names[0], names[3]]
+                    for ms in [2000, 1000, 0]]
+        for best_only in (False, True):
+            rows = [row for offset in range(0, 12, 2)
+                    for row in self.db.photos('Northern cardinal', offset, 2, best_only=best_only)]
+            self.assertEqual([(row['name'], row['ms']) for row in rows], expected)
 
     def test_cancellation_and_restart_do_not_publish_partial_gallery(self):
         identity = self.db.ingest(self.video)

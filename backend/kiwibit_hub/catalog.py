@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import config
 from .cancel import Cancelled, check_cancel
-from .overlap import origin_of, read_cloud_files
+from .overlap import origin_of, read_cloud_files, recorded_at
 from .sightings import (SMART_VERSION, UNCERTAIN, animal_tag, best_photos, collect_sightings, other_animals,
                         photo_quality, sighting_matches, summarize)
 from .tracking import NONBIRD_LABELS
@@ -58,6 +58,7 @@ class Catalog:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.root / "library.sqlite3", timeout=30, check_same_thread=check_same_thread)
         self.db.row_factory = sqlite3.Row
+        self.db.create_function("recorded_at", 1, recorded_at, deterministic=True)
         self._cloud = (None, set())  # (manifest mtime, cloud_files())
         if migrate:
             self._migrate()
@@ -279,7 +280,7 @@ class Catalog:
                                LEFT JOIN sightings s ON s.id=p.sighting_id
                                LEFT JOIN corrections c ON c.sighting_id=s.id
                                WHERE p.species=? {filter_best}
-                               ORDER BY p.quality DESC,v.name DESC,p.ms LIMIT ? OFFSET ?""",
+                               ORDER BY recorded_at(v.name) DESC,v.name DESC,p.ms DESC,p.path LIMIT ? OFFSET ?""",
                                (species, limit, offset)).fetchall()
 
     def result(self, identity, annotated=True):

@@ -2,7 +2,7 @@
   import CorrectionDialog from '../lib/CorrectionDialog.svelte';
   import Icon from '../lib/Icon.svelte';
   import { api, photoSighting, UNCERTAIN, type Photo, type Sighting, type SpeciesSummary } from '../lib/api';
-  import { clock, dateTime } from '../lib/format';
+  import { clock, dateTime, dayKey, dayLabel } from '../lib/format';
   import { hub } from '../lib/hub.svelte';
 
   let { species = null }: { species?: string | null } = $props();
@@ -22,6 +22,19 @@
   const uncertain = $derived(summaries.find((s) => s.species === UNCERTAIN));
   const current = $derived(summaries.find((s) => s.species === species));
   const selected = $derived(photos.find((p) => p.path === selectedPath) ?? photos[0] ?? null);
+  const groups = $derived.by(() => {
+    const result = new Map<string, { key: string; label: string; items: Photo[] }>();
+    for (const photo of photos) {
+      const key = dayKey(photo.recorded_at);
+      let group = result.get(key);
+      if (!group) {
+        group = { key, label: dayLabel(photo.recorded_at), items: [] };
+        result.set(key, group);
+      }
+      group.items.push(photo);
+    }
+    return [...result.values()];
+  });
   const totals = $derived({
     species: identified.length,
     photos: summaries.reduce((sum, s) => sum + s.photos, 0),
@@ -138,16 +151,21 @@
           <button type="button" aria-pressed={!best} onclick={() => { best = false; }}>All photos</button>
         </div>
       </header>
-      <div class="grid">
-        {#each photos as photo (photo.path)}
-          <button type="button" class="tile" aria-pressed={selected?.path === photo.path} onclick={() => open(photo)}>
-            <img src="/api/photos/{photo.path}?size=thumb" alt="{photo.species}, {dateTime(photo.recorded_at)}" loading="lazy">
-            <span class="caption">{dateTime(photo.recorded_at) || photo.name} <span class="mono muted">{clock(photo.ms)}</span></span>
-          </button>
-        {:else}
-          {#if !loading}<p class="muted">No photos for this species{best ? ' among the best photos' : ''}.</p>{/if}
-        {/each}
-      </div>
+      {#each groups as group (group.key)}
+        <section class="date-group" aria-label={group.label}>
+          <h3 class="date-heading">{group.label}</h3>
+          <div class="grid">
+            {#each group.items as photo (photo.path)}
+              <button type="button" class="tile" aria-pressed={selected?.path === photo.path} onclick={() => open(photo)}>
+                <img src="/api/photos/{photo.path}?size=thumb" alt="{photo.species}, {dateTime(photo.recorded_at)}" loading="lazy">
+                <span class="caption">{dateTime(photo.recorded_at) || photo.name} <span class="mono muted">{clock(photo.ms)}</span></span>
+              </button>
+            {/each}
+          </div>
+        </section>
+      {:else}
+        {#if !loading}<p class="muted">No photos for this species{best ? ' among the best photos' : ''}.</p>{/if}
+      {/each}
       {#if hasMore}
         <button type="button" class="btn more" disabled={loading} onclick={() => loadPhotos(false)}>{loading ? 'Loading…' : 'Load more photos'}</button>
       {/if}
@@ -221,6 +239,8 @@
   .gallery { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .gallery-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   h2 { margin: 0; font-size: 34px; font-weight: 600; line-height: 1.1; }
+  .date-group { display: flex; flex-direction: column; gap: 12px; }
+  .date-heading { margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); font-size: 16px; font-weight: 600; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
   .tile {
     display: flex; flex-direction: column; gap: 6px; padding: 0; border: none; background: none; text-align: left;
