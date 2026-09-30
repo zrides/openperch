@@ -207,7 +207,7 @@ class LiveApiTests(unittest.TestCase):
         self.live = LiveManager(FAKE)
         web = root / 'web'
         web.mkdir()
-        (web / 'index.html').write_text('<!doctype html><title>Kiwibit Hub</title>')
+        (web / 'index.html').write_text('<!doctype html><title>OpenPerch</title>')
         app = create_app(JobRunner(root / 'library', root / 'downloads', root), Credentials('kiwibit', 'pw'),
                          root / 'library', root, diagnostics=False, live=self.live, camera=camera, web=web)
         auth = {'Authorization': 'Basic ' + base64.b64encode(b'kiwibit:pw').decode()}
@@ -278,7 +278,7 @@ class LiveApiTests(unittest.TestCase):
     def test_web_app_is_served_after_api_routes(self):
         page = self.client.get('/')
         self.assertEqual(page.status_code, 200)
-        self.assertIn('Kiwibit Hub', page.text)
+        self.assertIn('OpenPerch', page.text)
         self.assertEqual(self.client.get('/api/health').json(), {'status': 'ok'})
 
 

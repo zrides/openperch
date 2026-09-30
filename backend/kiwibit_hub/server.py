@@ -214,7 +214,7 @@ def create_app(runner=None, credentials=None, library=None, media_root=None, dia
             await asyncio.to_thread(app.state.runner.shutdown, 60)
             log.info('Hub stopped')
 
-    app = FastAPI(title='Kiwibit Hub', version='0.1.0', lifespan=lifespan)
+    app = FastAPI(title='OpenPerch', version='0.1.0', lifespan=lifespan)
 
     @app.middleware('http')
     async def guard(request: Request, call_next):

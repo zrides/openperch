@@ -110,7 +110,7 @@ class LoginApiTests(unittest.TestCase):
         root = Path(self.temp.name)
         web = root / 'web'
         (web / 'assets').mkdir(parents=True)
-        (web / 'index.html').write_text('<!doctype html><title>Kiwibit Hub</title>')
+        (web / 'index.html').write_text('<!doctype html><title>OpenPerch</title>')
         (web / 'assets' / 'app.js').write_text('console.log(1)')
         self.limiter = LoginLimiter(attempts=3)
         app = create_app(JobRunner(root / 'library', root / 'downloads', root),

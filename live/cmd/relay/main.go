@@ -1,5 +1,5 @@
 // kiwibit-relay connects to a Kiwibit camera over WebRTC and re-serves its
-// video to browsers. It is started on demand by Kiwibit Hub.
+// video to browsers. It is started on demand by OpenPerch.
 //
 // Environment:
 //

@@ -1,4 +1,4 @@
-# Kiwibit Hub: web UI + FastAPI + BioCLIP/YOLO-World on CUDA 12.8 + live relay.
+# OpenPerch: web UI + FastAPI + BioCLIP/YOLO-World on CUDA 12.8 + live relay.
 # The PyTorch wheels bundle the CUDA runtime; the host only needs an NVIDIA
 # driver and the NVIDIA container runtime (Docker Desktop + WSL2 on Windows).
 

@@ -1,9 +1,9 @@
-name: kiwibit-hub
+name: openperch
 
 services:
   hub:
     build: .
-    image: kiwibit-hub:dev
+    image: openperch:dev
     ports:
       # Localhost only by default. Set KIWIBIT_HUB_BIND=0.0.0.0 in .env to reach it from your phone.
       - "${KIWIBIT_HUB_BIND:-127.0.0.1}:${KIWIBIT_HUB_PORT:-8765}:8000"

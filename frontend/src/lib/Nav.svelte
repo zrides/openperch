@@ -21,7 +21,7 @@
   <div class="brand">
     <span class="mark"><Icon name="bird" size={22} /></span>
     <span class="names">
-      <span class="serif title">Kiwibit Hub</span>
+      <span class="serif title">OpenPerch</span>
       <span class="muted small">Self-hosted</span>
     </span>
   </div>

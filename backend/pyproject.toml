@@ -1,7 +1,7 @@
 [project]
-name = "kiwibit-hub"
+name = "openperch"
 version = "0.1.0"
-description = "Self-hosted Kiwibit camera hub: cloud recordings, bird identification, library."
+description = "Self-hosted app for Kiwibit bird feeder cameras: recordings, bird identification, photo library."
 license = "AGPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [

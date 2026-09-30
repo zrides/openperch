@@ -1,11 +1,21 @@
-# Kiwibit Hub
+# OpenPerch
 
-A self-hosted replacement for the Kiwibit mobile app. It downloads the camera's
-cloud recordings, identifies birds locally (BioCLIP 2.5 + YOLO-World on your
-GPU), keeps a species photo library you can correct, and shows live view and
-the camera's settings, all in a web UI that works on desktop and phone.
+A self-hosted app for **Kiwibit smart bird feeder cameras**. OpenPerch
+downloads your camera's cloud recordings and SD-card footage, identifies the
+birds on your own GPU (BioCLIP 2.5 + YOLO-World), keeps a species photo
+library you can correct and score, and shows live view and the camera's
+settings, all in a web UI for desktop and phone. An alternative to the Kiwibit
+app that keeps your recordings and bird identifications at home.
 
-This is an unofficial client built from a reverse-engineered API.
+> **Unofficial.** OpenPerch is not affiliated with, endorsed by or supported by
+> Kiwibit. It uses your own Kiwibit account through an API reverse-engineered
+> from the Kiwibit app, so it may stop working if that API changes. "Kiwibit"
+> is a trademark of its owner and is used here only to say which cameras
+> OpenPerch works with.
+
+It has been used with one Kiwibit bird feeder camera (4K recording, SD card,
+cloud storage). Other cameras that use the Kiwibit app will probably work;
+reports are welcome.
 
 | Folder | Contents |
 |---|---|
@@ -226,7 +236,7 @@ with "disk I/O error".
 
 Copyright (c) 2026 Zach Rideout.
 
-Kiwibit Hub is free software: you can redistribute it and/or modify it under
+OpenPerch is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License, version 3
 (`AGPL-3.0-only`), as published by the Free Software Foundation. It comes with
 no warranty. See [LICENSE](LICENSE).

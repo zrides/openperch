@@ -28,7 +28,7 @@
   <form class="card" onsubmit={submit} aria-labelledby="sign-in-title">
     <div class="brand">
       <span class="mark"><Icon name="bird" size={26} /></span>
-      <span class="serif name">Kiwibit Hub</span>
+      <span class="serif name">OpenPerch</span>
     </div>
     <h1 id="sign-in-title" class="serif">Sign in</h1>
     <label>
