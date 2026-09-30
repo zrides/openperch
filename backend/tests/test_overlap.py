@@ -90,6 +90,12 @@ class OffsetTests(unittest.TestCase):
 
 
 class NameTests(unittest.TestCase):
+    def test_desk_feeder_24_hour_names(self):
+        self.assertEqual(recorded_at('2026-09-29T18-29-01-04-00.mp4'), '2026-09-29T22:29:01+00:00')
+        self.assertEqual(recorded_at('2026-09-29T00-15-00+05-30.mp4'), '2026-09-28T18:45:00+00:00')
+        for name in ('2026-09-29T24-00-00-04-00.mp4', '2026-09-29T13-00-00PM-04-00.mp4'):
+            self.assertIsNone(recorded_at(name))
+
     def test_cloud_and_card_names_agree_across_midnight_and_dst(self):
         # 11:30 PM EDT on Sept 18 is 03:30 UTC on Sept 19.
         self.assertEqual(start_seconds('2026-09-18T11-30-00PM-04-00.mp4'),

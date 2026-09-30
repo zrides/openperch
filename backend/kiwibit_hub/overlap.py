@@ -21,8 +21,8 @@ from . import config
 
 # Downloaded recordings are named <UTC start>_<digest>.mp4, e.g. 20260925T185753Z_3a88a9623053ee38.mp4.
 RECORDED_AT = re.compile(r'^(\d{8}T\d{6}Z)_')
-# SD-card clips are named by local start time and UTC offset, e.g. 2026-09-18T12-52-18PM-04-00.mp4.
-CARD_RECORDED_AT = re.compile(r'^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(AM|PM)([+-]\d{2})-(\d{2})')
+# Firmware uses either 12-hour AM/PM or 24-hour local time, with a UTC offset.
+CARD_RECORDED_AT = re.compile(r'^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(AM|PM)?([+-]\d{2})-(\d{2})')
 
 # Where a recording came from, decided when it joins the library.
 ORIGINS = ('cloud', 'sdcard', 'live', 'unknown')
@@ -47,7 +47,13 @@ def recorded_at(name):
         card = CARD_RECORDED_AT.match(name)
         if card:
             date, hour, minute, second, half, zone_hours, zone_minutes = card.groups()
-            hour = int(hour) % 12 + (12 if half == 'PM' else 0)
+            hour = int(hour)
+            if half:
+                if not 1 <= hour <= 12:
+                    return None
+                hour = hour % 12 + (12 if half == 'PM' else 0)
+            elif not 0 <= hour <= 23:
+                return None
             local = datetime.fromisoformat(f'{date}T{hour:02d}:{minute}:{second}{zone_hours}:{zone_minutes}')
             return local.astimezone(timezone.utc).isoformat()
     except ValueError:
